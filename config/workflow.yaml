@@ -1,0 +1,54 @@
+# myforge workflow DAG
+# Nodes execute in topological order. HITL nodes pause and wait for a
+# signal file at state/hitl/{gate}.json with {"approved": true}.
+
+# Target repo: where files actually land on disk. Each task gets its own
+# git worktree at <target_repo>/.worktrees/<task_id>/ on a branch named
+# myforge/<task_id>. On approval, the branch merges back to target_repo's
+# current branch and the worktree is removed.
+target_repo: "${MYFORGE_TARGET_REPO:./target_repo}"
+
+dag:
+  - id: thinker
+    agent: thinker
+    next: hitl_plan
+
+  - id: hitl_plan
+    type: hitl
+    gate: plan_approval
+    next: coder
+
+  - id: coder
+    agent: coder
+    next: reviewer
+
+  - id: reviewer
+    agent: reviewer
+    next: review_check
+
+  - id: review_check
+    type: branch
+    # branch on state/review/{task}.md -> status field
+    if_approved: done
+    if_rejected: bugfixer
+
+  - id: bugfixer
+    agent: bugfixer
+    next: reviewer   # re-review (bounded by max_iterations)
+
+  - id: done
+    type: terminal
+
+# Safety: never let coder <-> reviewer loop forever
+max_review_iterations: 2
+
+# Safety: keep simple goals from turning into analysis/test task explosions.
+max_tasks_per_goal: 2
+
+# Researcher is conditional — invoked only when thinker flags a task
+# with needs_research: true. The orchestrator inserts it before coder
+# for that specific task only.
+conditional_agents:
+  - agent: researcher
+    trigger_field: "needs_research"
+    insert_before: coder

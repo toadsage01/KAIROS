@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# State (runtime, git-versioned separately if you choose)
+state/*.md
+state/*.json
+!state/.gitkeep
+research/
+changes/
+review/
+hitl/
+logs/
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

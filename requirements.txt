@@ -1,0 +1,32 @@
+# myforge — dependencies
+# Pin versions loosely; all free-tier friendly.
+# User note: LiteLLM 1.90+ requires httpx>=0.28 and tokenizers>=0.21.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+streamlit==1.41.1
+litellm==1.90.0
+pydantic==2.10.4
+pyyaml==6.0.2
+jinja2==3.1.6
+httpx==0.28.1
+python-dotenv==1.0.1
+watchdog==6.0.0
+
+# Phase 3-5 — optional but recommended. Without these the system still
+# runs but degrades: no vector retrieval, no cron, no MCP, no web extract.
+chromadb==1.5.9
+apscheduler==3.11.0
+trafilatura==2.0.0
+
+# Uncomment if you want tree-sitter-based symbol parsing (richer codemap).
+# Without it, codemap falls back to regex scanning (works for Python/JS/TS/Go/Rust).
+# tree-sitter==0.23.2
+# tree-sitter-languages==1.2.1
+
+# Uncomment if you want MCP tool support (Phase 4).
+# mcp==1.2.0
+
+# Mobile HITL — Telegram bot. Without it, notifications are no-ops
+# (myforge works fine, just no phone notifications).
+python-telegram-bot==21.10
