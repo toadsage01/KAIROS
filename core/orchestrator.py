@@ -65,12 +65,22 @@ def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
         lines = blk.strip().splitlines()
         if not lines:
             continue
-        task_id = lines[0].strip()
+            
+        # CRITICAL FIX: Enforce strict T1/T2 format from the header.
+        header_id_match = re.match(r"^(T\d+)", lines[0].strip())
+        if not header_id_match:
+            continue  # Skip if the header doesn't start with T1, T2, etc.
+            
+        task_id = header_id_match.group(1)
         task: dict[str, Any] = {"id": task_id}
+        
         for ln in lines[1:]:
             m = re.match(r"^-\s+(\w+):\s*(.*)$", ln)
             if m:
                 k, v = m.group(1), m.group(2).strip()
+                # Ignore the LLM's "- id:" line so it can't overwrite the header!
+                if k == "id":
+                    continue
                 if k in ("needs_research",):
                     task[k] = v.lower() == "true"
                 elif k == "files":
