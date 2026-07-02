@@ -97,6 +97,25 @@ class Worktree:
         target.write_text(content, encoding="utf-8")
         return target
 
+    def delete_file(self, rel_path: str) -> Path:
+        """Delete a file inside the worktree."""
+        root = self.ensure()
+        cleaned = rel_path.strip().strip("\"'")
+        if not cleaned:
+            raise ValueError(f"refusing to delete invalid path: {rel_path!r}")
+        rel = Path(cleaned)
+        if rel.is_absolute() or ".." in rel.parts:
+            raise ValueError(f"refusing to delete unsafe path: {rel_path!r}")
+        target = root / rel
+        resolved = target.resolve()
+        if root.resolve() not in resolved.parents and resolved != root.resolve():
+            raise ValueError(f"refusing to delete outside worktree: {rel_path!r}")
+        if target.exists() and not target.is_file():
+            raise ValueError(f"refusing to delete non-file path: {rel_path!r}")
+        if target.exists():
+            target.unlink()
+        return target
+
     def read_file(self, rel_path: str) -> str | None:
         root = self.ensure()
         p = root / rel_path

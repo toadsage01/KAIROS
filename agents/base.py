@@ -18,6 +18,14 @@ from core.workspace import Worktree
 from llm.router import AgentConfig, route, load_agents
 
 
+class AgentBlocked(Exception):
+    """Raised when a model explicitly declines to proceed via <blocked>."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
 @dataclass
 class AgentContext:
     """Bounded input passed to an agent invocation."""
@@ -50,6 +58,37 @@ class BaseAgent(ABC):
         """Optional extra context injected into the system prompt."""
         return ""
 
+    def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
+        """Variables used to render the agent's system prompt template."""
+        task = ctx.task or {}
+        extra = ctx.extra or {}
+        title = str(task.get("title", ""))
+        description = str(task.get("description", ""))
+        acceptance = str(task.get("acceptance_criteria", ""))
+        files = str(task.get("files", ""))
+        task_description = "\n".join(
+            part for part in (
+                f"Title: {title}" if title else "",
+                f"Description: {description}" if description else "",
+                f"Files: {files}" if files else "",
+            ) if part
+        )
+        return {
+            "task_id": ctx.task_id,
+            "state_md_content": "",
+            "specific_goal_or_phase": "",
+            "compressed_state_md_slice": "",
+            "relevant_file_tree_or_ast_summary": "",
+            "existing_dependencies_or_stack_summary": "",
+            "specific_task_description": task_description,
+            "bullet_list_of_done_conditions": acceptance,
+            "coder_response_or_diff": "",
+            "coder_response_or_current_files": "",
+            "reviewer_rejection_list": "",
+            "prior_rejection_count": extra.get("prior_rejection_count", 0),
+            "prior_fix_attempt_count": extra.get("retry_count", 0),
+        }
+
     def run(self, ctx: AgentContext) -> str:
         """One LLM call. Writes output. Returns the state file path."""
         prompt = self.build_prompt(ctx)
@@ -58,6 +97,7 @@ class BaseAgent(ABC):
             prompt=prompt,
             agents=self.agents_cfg,
             extra_context=self.extra_context(ctx),
+            template_vars=self.template_vars(ctx),
         )
         path = self.write_output(ctx, out)
         self.state.append_log(

@@ -21,18 +21,23 @@ class FileBlock:
     path: str
     content: str
     language: str
+    action: str = "modify"
 
 
-# Matches:  ```lang path=relative/path
-_EXPLICIT_FENCE_RE = re.compile(
-    r"^```([a-zA-Z0-9_+-]*)\s+path=(\S+)\s*$",
+# Matches:  ```lang [path=relative/path] [action=create|modify|delete]
+_FENCE_RE = re.compile(
+    r"^```([a-zA-Z0-9_+-]*)([^\n`]*)\s*$",
     re.MULTILINE,
 )
 
-# Matches:  ```lang  (no path=)
-_IMPLICIT_FENCE_RE = re.compile(
-    r"^```([a-zA-Z0-9_+-]*)\s*$",
-    re.MULTILINE,
+_FENCE_ATTR_RE = re.compile(
+    r"\b(?P<key>path|action)=(?P<value>\"[^\"]+\"|'[^']+'|\S+)",
+    re.IGNORECASE,
+)
+
+_BLOCKED_RE = re.compile(
+    r"<blocked>\s*(?P<reason>.*?)\s*</blocked>",
+    re.IGNORECASE | re.DOTALL,
 )
 
 _TRAILING_NON_CODE_MARKERS = (
@@ -44,6 +49,22 @@ _TRAILING_NON_CODE_MARKERS = (
     "# EXPLANATION",
     "INPUT HANDLING AND VALIDATION ANALYSIS",
 )
+
+
+def _parse_fence_attrs(attrs: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in _FENCE_ATTR_RE.finditer(attrs):
+        value = m.group("value").strip().strip("\"'")
+        out[m.group("key").lower()] = value
+    return out
+
+
+def extract_blocked(md: str) -> str | None:
+    """Return a model's blocked reason, if it emitted a <blocked> tag."""
+    m = _BLOCKED_RE.search(md)
+    if not m:
+        return None
+    return m.group("reason").strip() or "agent declined without a reason"
 
 
 def _infer_path(content: str, task: dict | None = None, task_id: str = "") -> str:
@@ -103,31 +124,14 @@ def parse_coder_output(md: str, task: dict | None = None, task_id: str = "") -> 
     pos = 0
 
     while pos < len(md):
-        # Try explicit fence first: ```lang path=file
-        m_explicit = _EXPLICIT_FENCE_RE.search(md, pos)
-        # Then implicit fence: ```lang (no path)
-        m_implicit = _IMPLICIT_FENCE_RE.search(md, pos)
-
-        # Pick whichever comes first
-        candidates = []
-        if m_explicit:
-            candidates.append(("explicit", m_explicit))
-        if m_implicit:
-            candidates.append(("implicit", m_implicit))
-
-        if not candidates:
+        m = _FENCE_RE.search(md, pos)
+        if not m:
             break
 
-        # Sort by position, take the earliest
-        candidates.sort(key=lambda x: x[1].start())
-        kind, m = candidates[0]
-
-        if kind == "explicit":
-            lang = m.group(1) or "text"
-            path = m.group(2)
-        else:
-            lang = m.group(1) or "python"
-            path = None  # will infer below
+        lang = m.group(1) or "python"
+        attrs = _parse_fence_attrs(m.group(2) or "")
+        path = attrs.get("path")
+        action = attrs.get("action", "modify").lower()
 
         content_start = m.end()
         close_idx = md.find("\n```", content_start)
@@ -140,14 +144,14 @@ def parse_coder_output(md: str, task: dict | None = None, task_id: str = "") -> 
 
         content = _strip_trailing_non_code(content, lang)
 
-        # Skip empty blocks
-        if not content.strip():
+        # Skip empty blocks unless they explicitly delete a file.
+        if not content.strip() and action != "delete":
             continue
 
         # Infer path if not provided
         if not path:
             path = _infer_path(content, task, task_id)
 
-        blocks.append(FileBlock(path=path, content=content, language=lang))
+        blocks.append(FileBlock(path=path, content=content, language=lang, action=action))
 
     return blocks

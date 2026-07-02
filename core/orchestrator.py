@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 import yaml
 
-from agents.base import AgentContext, BaseAgent
+from agents.base import AgentBlocked, AgentContext, BaseAgent
 from agents.thinker import ThinkerAgent
 from agents.coder import CoderAgent
 from agents.reviewer import ReviewerAgent
@@ -82,7 +82,7 @@ def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
 
 
 def _parse_review_status(review_md: str) -> str:
-    """Return 'approved' or 'rejected' from a review file."""
+    """Return the review status from a review file."""
     # First check our injected header
     m = re.search(r"<!-- status: (\w+) -->", review_md)
     if m:
@@ -147,14 +147,7 @@ def _sanitize_tasks(
     if clean:
         return clean
 
-    fallback: dict[str, Any] = {
-        "id": "T1",
-        "title": "Implement requested change",
-        "description": goal,
-        "needs_research": False,
-        "files": default_file,
-    }
-    return [fallback]
+    return []
 
 
 @dataclass
@@ -279,6 +272,12 @@ class Orchestrator:
             rs.last_step_at = time.strftime("%Y-%m-%dT%H:%M:%S")
             try:
                 rs = self._execute_node(rs, node)
+            except AgentBlocked as e:
+                rs.last_error = f"agent declined: {e.reason}"
+                self.state.append_log(
+                    f"agent declined at node={node.id}: {e.reason}"
+                )
+                break
             except Exception as e:  # noqa: BLE001
                 rs.status = "error"
                 rs.last_error = f"{type(e).__name__}: {e}"
@@ -355,11 +354,18 @@ class Orchestrator:
             task_id = rs.tasks[rs.current_task_index]["id"]
             review_md = self.state.read_md(task_id, subdir="review") or ""
             decision = _parse_review_status(review_md)
+            routing_decision = "rejected" if decision == "unverifiable" else decision
             iters = rs.review_iterations.get(task_id, 0) + 1
             rs.review_iterations[task_id] = iters
-            if iters > self.dag.max_review_iterations and decision == "rejected":
+            if decision != "approved":
                 self.state.append_log(
-                    f"task {task_id}: max review iterations exceeded, aborting worktree"
+                    f"task {task_id}: review decision={decision} "
+                    f"(routing={routing_decision}) iteration={iters}"
+                )
+            if iters > self.dag.max_review_iterations and decision != "approved":
+                self.state.append_log(
+                    f"task {task_id}: max review iterations exceeded after "
+                    f"{decision}, aborting worktree"
                 )
                 # Abort the worktree — its branch is discarded
                 try:
@@ -367,15 +373,17 @@ class Orchestrator:
                 except Exception as e:  # noqa: BLE001
                     self.state.append_log(f"worktree abort failed: {e}")
                 rs.status = "error"
-                rs.last_error = f"task {task_id} rejected after {iters} iterations"
+                rs.last_error = (
+                    f"task {task_id} {decision} after {iters} iterations"
+                )
                 return rs
-            next_node = self.dag.next_node(node.id, decision)
+            next_node = self.dag.next_node(node.id, routing_decision)
             if next_node is None:
                 rs.status = "error"
                 rs.last_error = f"no next node from branch {node.id}"
                 return rs
             # On approval, merge the worktree's branch back to the target repo.
-            if decision == "approved" and next_node.id in ("done",):
+            if decision == "approved" and next_node.kind == "terminal":
                 try:
                     sha = self.workspace.for_task(task_id).merge_to_target()
                     self.state.append_log(
@@ -390,7 +398,7 @@ class Orchestrator:
                     return rs
             # Multi-task loop: if branch approved -> "done" AND we have more
             # tasks, advance task index and go back to coder for the next one.
-            if (next_node.id == "done" and decision == "approved"
+            if (next_node.kind == "terminal" and decision == "approved"
                     and rs.current_task_index < len(rs.tasks) - 1):
                 rs.current_task_index += 1
                 rs.current_node_id = "coder"
@@ -430,6 +438,11 @@ class Orchestrator:
                 repo_root=self.dag.target_repo,
                 max_tasks=self.dag.max_tasks_per_goal,
             )
+            if not rs.tasks:
+                rs.status = "error"
+                rs.last_error = "thinker produced no executable tasks"
+                self.state.append_log(rs.last_error)
+                return rs
             self.state.append_log(f"thinker produced {len(rs.tasks)} tasks")
             rs.current_task_index = 0
             rs.current_node_id = node.next or "hitl_plan"
@@ -477,9 +490,15 @@ class Orchestrator:
                     retrieval_ctx = ""
 
         agent = _AGENT_CLASSES[agent_name](self.state, self.agents_cfg)
+        extra: dict[str, Any] = {
+            "retry_count": rs.review_iterations.get(task_id, 0),
+            "prior_rejection_count": rs.review_iterations.get(task_id, 0),
+        }
+        if retrieval_ctx:
+            extra["retrieval"] = retrieval_ctx
         ctx = AgentContext(
             task_id=task_id, task=task, state=self.state,
-            worktree=wt, extra={"retrieval": retrieval_ctx} if retrieval_ctx else None,
+            worktree=wt, extra=extra,
         )
         agent.run(ctx)
 

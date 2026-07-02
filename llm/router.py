@@ -1,5 +1,5 @@
 """
-LLM Router — LiteLLM wrapper with fallback chain + mock provider.
+LLM Router — LiteLLM wrapper with fallback chain + mock provider + web bridges.
 
 Design rules (per project spec):
   - Each agent = ONE LLM call with bounded input.
@@ -9,15 +9,27 @@ Design rules (per project spec):
   - Token cost is predictable because there is no chatter — exactly one
     successful call per agent per invocation.
 
+Web Bridge Support (Kairos extension):
+  Each model slot in agents.yaml can be either a string (legacy) or a
+  dict with api_base + api_key. This lets you mix cloud APIs and web
+  bridges (WebAI2API, intense-rp-next, etc.) in the same fallback chain.
+
+  Example:
+    fallback_2:
+      model: "openai/gpt-pro"
+      api_base: "http://localhost:3006/v1"
+      api_key: "sk-kairos-master-2026"
+      request_timeout: 120
+      num_retries: 0
+
 The router is the ONLY place that knows about LiteLLM. Agents import
 `route()` and get back a string.
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +37,13 @@ import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
+
+try:
+    from jinja2 import Environment
+    _HAS_JINJA = True
+except ImportError:
+    Environment = None  # type: ignore
+    _HAS_JINJA = False
 
 # Lazy import — litellm is heavy and we want graceful failure if missing
 try:
@@ -35,13 +54,55 @@ except ImportError:
     _HAS_LITELLM = False
 
 
+# ---------- model endpoint ----------
+@dataclass
+class ModelEndpoint:
+    """A single model endpoint. May be a cloud API (model only) or a web
+    bridge (model + api_base + api_key)."""
+    model: str
+    api_base: str | None = None
+    api_key: str | None = None
+    request_timeout: int = 60
+    num_retries: int = 0  # our route() does its own fallback; let LiteLLM fail fast
+
+    @classmethod
+    def parse(cls, spec: str | dict | None) -> "ModelEndpoint | None":
+        """Parse a model slot from YAML. Accepts:
+          - None → None
+          - "groq/llama-3.3-70b" → ModelEndpoint(model="groq/llama-3.3-70b")
+          - {model: "openai/gpt-pro", api_base: "...", api_key: "..."} → full endpoint
+        """
+        if spec is None:
+            return None
+        if isinstance(spec, str):
+            return cls(model=spec)
+        if isinstance(spec, dict):
+            return cls(
+                model=spec.get("model", ""),
+                api_base=spec.get("api_base"),
+                api_key=spec.get("api_key"),
+                request_timeout=int(spec.get("request_timeout", 60)),
+                num_retries=int(spec.get("num_retries", 0)),
+            )
+        raise ValueError(f"invalid model spec: {spec!r}")
+
+    @property
+    def display_name(self) -> str:
+        """Short name for logs — includes api_base host if web bridge."""
+        if self.api_base:
+            from urllib.parse import urlparse
+            host = urlparse(self.api_base).hostname or self.api_base
+            return f"{self.model}@{host}"
+        return self.model
+
+
 @dataclass
 class AgentConfig:
     name: str
     role: str
-    primary: str
-    fallback: str | None = None
-    fallback_2: str | None = None
+    primary: ModelEndpoint
+    fallback: ModelEndpoint | None = None
+    fallback_2: ModelEndpoint | None = None
     system_prompt_file: str | None = None
     temperature: float = 0.2
     max_tokens: int = 2048
@@ -55,12 +116,15 @@ def load_agents(path: str = "config/agents.yaml") -> dict[str, AgentConfig]:
     out: dict[str, AgentConfig] = {}
     for name, a in spec.get("agents", {}).items():
         model = a.get("model", {})
+        primary = ModelEndpoint.parse(model.get("primary"))
+        if primary is None:
+            raise ValueError(f"agent {name} has no primary model")
         out[name] = AgentConfig(
             name=name,
             role=a.get("role", ""),
-            primary=model.get("primary", ""),
-            fallback=model.get("fallback"),
-            fallback_2=model.get("fallback_2"),
+            primary=primary,
+            fallback=ModelEndpoint.parse(model.get("fallback")),
+            fallback_2=ModelEndpoint.parse(model.get("fallback_2")),
             system_prompt_file=a.get("system_prompt_file"),
             temperature=a.get("temperature", 0.2),
             max_tokens=a.get("max_tokens", 2048),
@@ -75,6 +139,21 @@ def _load_prompt(path: str) -> str:
     if not p.exists():
         return ""
     return p.read_text(encoding="utf-8")
+
+
+def _render_prompt_template(template: str, variables: dict[str, Any]) -> str:
+    """Render a system prompt template before sending it to the model."""
+    if not template or "{{" not in template:
+        return template
+    if _HAS_JINJA and Environment is not None:
+        env = Environment(autoescape=False)
+        return env.from_string(template).render(**variables)
+
+    rendered = template
+    for key, value in variables.items():
+        rendered = rendered.replace("{{ " + key + " }}", str(value))
+        rendered = rendered.replace("{{" + key + "}}", str(value))
+    return rendered
 
 
 def _mock_response(agent: str, prompt: str, role: str) -> str:
@@ -130,51 +209,40 @@ def _mock_response(agent: str, prompt: str, role: str) -> str:
     return f"[mock {agent}] {role}"
 
 
-def _call_litellm(model: str, system: str, prompt: str,
+def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
                   temperature: float, max_tokens: int) -> str:
-    """Single LiteLLM call. Raises on failure."""
+    """Single LiteLLM call. Raises on failure.
+
+    Passes api_base and api_key when set (web bridge mode). Cloud APIs
+    (no api_base) use LiteLLM's default routing via env vars.
+    """
     if not _HAS_LITELLM:
         raise RuntimeError("litellm not installed")
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
-    resp = litellm.completion(
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    content = resp.choices[0].message.content  # type: ignore
-    if isinstance(content, str):
-        if content.strip():
-            try:
-                parsed = json.loads(content)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, dict) and "tool" in parsed:
-                raise ValueError(f"{model} returned unsupported tool-call JSON")
-            return content
-        raise ValueError(f"{model} returned empty message content")
-    if isinstance(content, list):
-        text_parts = [
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        text = "\n".join(p for p in text_parts if p)
-        if text.strip():
-            return text
-    raise ValueError(f"{model} returned no text content")
+    kwargs: dict[str, Any] = {
+        "model": endpoint.model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "num_retries": endpoint.num_retries,
+        "request_timeout": endpoint.request_timeout,
+    }
+    # Web bridge: pass api_base + api_key so LiteLLM hits our local proxy
+    if endpoint.api_base:
+        kwargs["api_base"] = endpoint.api_base
+    if endpoint.api_key:
+        kwargs["api_key"] = endpoint.api_key
+    resp = litellm.completion(**kwargs)
+    return resp.choices[0].message.content  # type: ignore
 
 
-def _log_fallback(agent: str, model_tried: str, err: Exception,
+def _log_fallback(agent: str, endpoint: ModelEndpoint, err: Exception,
                   next_label: str | None) -> None:
     """Append a fallback event to logs/router.log so users can see which
-    model in the chain succeeded and which failed.
-
-    This is the Phase 5 'model fallback logging' requirement.
-    """
+    model in the chain succeeded and which failed."""
     from pathlib import Path
     import time
     log_path = Path("logs/router.log")
@@ -183,12 +251,12 @@ def _log_fallback(agent: str, model_tried: str, err: Exception,
     with log_path.open("a", encoding="utf-8") as f:
         f.write(
             f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] "
-            f"agent={agent} model={model_tried} failed: "
+            f"agent={agent} model={endpoint.display_name} failed: "
             f"{type(err).__name__}: {err}{next_msg}\n"
         )
 
 
-def _log_success(agent: str, model: str, is_mock: bool) -> None:
+def _log_success(agent: str, endpoint: ModelEndpoint, is_mock: bool) -> None:
     from pathlib import Path
     import time
     log_path = Path("logs/router.log")
@@ -197,18 +265,66 @@ def _log_success(agent: str, model: str, is_mock: bool) -> None:
     with log_path.open("a", encoding="utf-8") as f:
         f.write(
             f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] "
-            f"agent={agent} model={model} OK ({kind})\n"
+            f"agent={agent} model={endpoint.display_name} OK ({kind})\n"
+        )
+
+
+def _log_prompt_response(agent: str, endpoint: ModelEndpoint,
+                          system: str, prompt: str, response: str) -> None:
+    """Log the full prompt + response for debugging.
+
+    One file per LLM call, saved to logs/prompts/.
+    Filename: {timestamp}_{agent}_{model_slug}.txt
+
+    This is essential for prompt engineering — you can't improve prompts
+    you can't see. Read these files in VS Code to debug why the SOTA model
+    returned conversational text instead of code blocks, etc.
+    """
+    from pathlib import Path
+    import time
+    log_dir = Path("logs/prompts")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    model_slug = endpoint.model.replace("/", "_").replace(":", "_")
+    filename = f"{ts}_{agent}_{model_slug}.txt"
+    filepath = log_dir / filename
+    content = f"""=== AGENT: {agent} ===
+=== MODEL: {endpoint.display_name} ===
+=== TIMESTAMP: {time.strftime('%Y-%m-%dT%H:%M:%S')} ===
+
+========== SYSTEM PROMPT ==========
+{system}
+
+========== USER PROMPT ==========
+{prompt}
+
+========== MODEL RESPONSE ==========
+{response}
+
+========== END ==========
+"""
+    filepath.write_text(content, encoding="utf-8")
+    # Also log the filepath to router.log so it's discoverable
+    log_path = Path("logs/router.log")
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(
+            f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] "
+            f"prompt_log: {filepath}\n"
         )
 
 
 def route(agent_name: str, prompt: str,
           agents: dict[str, AgentConfig] | None = None,
-          extra_context: str = "") -> str:
+          extra_context: str = "",
+          template_vars: dict[str, Any] | None = None) -> str:
     """Run one agent. Returns the model's text output.
 
     Tries primary -> fallback -> fallback_2 -> mock (if allowed).
     Never raises (unless allow_mock=False and all providers fail).
     Logs every attempt to logs/router.log so fallback chains are auditable.
+
+    Each endpoint may be a cloud API (model only) or a web bridge
+    (model + api_base + api_key). The chain can mix both freely.
     """
     if agents is None:
         agents = load_agents()
@@ -216,37 +332,41 @@ def route(agent_name: str, prompt: str,
     if cfg is None:
         raise KeyError(f"unknown agent: {agent_name}")
 
-    system = _load_prompt(cfg.system_prompt_file) if cfg.system_prompt_file else cfg.role
+    system_template = (
+        _load_prompt(cfg.system_prompt_file) if cfg.system_prompt_file else cfg.role
+    )
+    system = _render_prompt_template(system_template, template_vars or {})
     if extra_context:
         system = f"{system}\n\n## Context\n{extra_context}"
 
-    chain = [
+    chain: list[tuple[str, ModelEndpoint | None]] = [
         ("primary", cfg.primary),
         ("fallback", cfg.fallback),
         ("fallback_2", cfg.fallback_2),
     ]
     last_err: Exception | None = None
-    for i, (label, model) in enumerate(chain):
-        if not model:
+    for i, (label, endpoint) in enumerate(chain):
+        if endpoint is None:
             continue
         try:
             out = _call_litellm(
-                model=model,
+                endpoint=endpoint,
                 system=system,
                 prompt=prompt,
                 temperature=cfg.temperature,
                 max_tokens=cfg.max_tokens,
             )
-            _log_success(agent_name, model, is_mock=False)
+            _log_success(agent_name, endpoint, is_mock=False)
+            _log_prompt_response(agent_name, endpoint, system, prompt, out)
             return out
         except Exception as e:  # noqa: BLE001
             last_err = e
             next_label = chain[i + 1][0] if i + 1 < len(chain) else None
-            _log_fallback(agent_name, model, e, next_label)
+            _log_fallback(agent_name, endpoint, e, next_label)
             continue
 
     if cfg.allow_mock:
-        _log_success(agent_name, "mock", is_mock=True)
+        _log_success(agent_name, ModelEndpoint(model="mock"), is_mock=True)
         return _mock_response(agent_name, prompt, cfg.role)
     raise RuntimeError(
         f"agent {agent_name}: all providers failed and mock disabled. last_err={last_err}"

@@ -2,8 +2,10 @@
 changes/{task_id}.md and updates files in the worktree."""
 from __future__ import annotations
 
-from agents.base import AgentContext, BaseAgent
-from core.parser import parse_coder_output
+from typing import Any
+
+from agents.base import AgentBlocked, AgentContext, BaseAgent
+from core.parser import extract_blocked, parse_coder_output
 
 
 def _looks_like_placeholder_path(path: str, existing: list[str]) -> bool:
@@ -24,13 +26,29 @@ def _single_existing_source(existing: list[str]) -> str | None:
 class BugfixerAgent(BaseAgent):
     name = "bugfixer"
 
+    def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
+        vars_ = super().template_vars(ctx)
+        changes = self.state.read_md(ctx.task_id, subdir="changes") or ""
+        review = self.state.read_md(ctx.task_id, subdir="review") or ""
+        vars_["coder_response_or_current_files"] = changes[:4000]
+        vars_["reviewer_rejection_list"] = review[:3000]
+        if ctx.worktree is not None:
+            vars_["relevant_file_tree_or_ast_summary"] = "\n".join(
+                ctx.worktree.list_files()[:50]
+            )
+        return vars_
+
     def build_prompt(self, ctx: AgentContext) -> str:
         task = ctx.task or {}
+        retry_count = 0
+        if ctx.extra:
+            retry_count = int(ctx.extra.get("retry_count", 0) or 0)
         changes = self.state.read_md(ctx.task_id, subdir="changes") or ""
         review = self.state.read_md(ctx.task_id, subdir="review") or ""
         parts = [
             f"Apply the reviewer's defect list to the coder's output for task {ctx.task_id}.",
             f"\nTask title: {task.get('title', '')}",
+            f"\nRetry count: {retry_count}",
             f"\n--- changes/{ctx.task_id}.md (current coder output) ---\n{changes}\n--- end ---",
             f"\n--- review/{ctx.task_id}.md ---\n{review}\n--- end ---",
         ]
@@ -52,6 +70,10 @@ class BugfixerAgent(BaseAgent):
         return "\n".join(parts)
 
     def write_output(self, ctx: AgentContext, model_output: str) -> str:
+        blocked = extract_blocked(model_output)
+        if blocked:
+            raise AgentBlocked(blocked)
+
         path = self.state.write_md(ctx.task_id, model_output, subdir="changes")
         if ctx.worktree is not None:
             blocks = parse_coder_output(model_output, task=ctx.task, task_id=ctx.task_id)
@@ -62,7 +84,10 @@ class BugfixerAgent(BaseAgent):
             for blk in blocks:
                 if single_source and _looks_like_placeholder_path(blk.path, existing):
                     blk.path = single_source
-                ctx.worktree.write_file(blk.path, blk.content)
+                if blk.action == "delete":
+                    ctx.worktree.delete_file(blk.path)
+                else:
+                    ctx.worktree.write_file(blk.path, blk.content)
             ctx.worktree.commit(f"myforge: bugfixer pass for {ctx.task_id}")
             self.state.append_log(
                 f"bugfixer task={ctx.task_id} wrote {len(blocks)} file(s) to worktree"

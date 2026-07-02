@@ -12,12 +12,23 @@ notes from its own knowledge (clearly labeled as such).
 """
 from __future__ import annotations
 
-from agents.base import AgentContext, BaseAgent
+from typing import Any
+
+from agents.base import AgentBlocked, AgentContext, BaseAgent
+from core.parser import extract_blocked
 from tools.web import search_and_extract
 
 
 class ResearcherAgent(BaseAgent):
     name = "researcher"
+
+    def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
+        vars_ = super().template_vars(ctx)
+        if ctx.task:
+            vars_["existing_dependencies_or_stack_summary"] = str(
+                ctx.task.get("files", "")
+            )
+        return vars_
 
     def build_prompt(self, ctx: AgentContext) -> str:
         task = ctx.task or {}
@@ -61,5 +72,9 @@ class ResearcherAgent(BaseAgent):
         return "\n".join(parts)
 
     def write_output(self, ctx: AgentContext, model_output: str) -> str:
+        blocked = extract_blocked(model_output)
+        if blocked:
+            raise AgentBlocked(blocked)
+
         path = self.state.write_md(ctx.task_id, model_output, subdir="research")
         return str(path)

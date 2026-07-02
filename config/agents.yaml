@@ -1,26 +1,65 @@
-# myforge agent definitions
-# Each agent = ONE LLM call with bounded input. No chatter.
-# Fallback chain is tried top-to-bottom. If all fail and allow_mock=true,
-# the router returns a deterministic mock so dev never blocks on a key.
+# myforge agent definitions — SOTA Multi-Provider Edition
+#
+# WebAI2API bridge at localhost:3006 provides access to:
+#   - openai/gpt-pro        (ChatGPT — GPT-4o class)
+#   - anthropic/claude-opus (Claude web — Claude 4 Opus class)
+#   - deepseek/deepseek-chat (DeepSeek web)
+#   - google/gemini-pro     (Gemini web)
+#
+# All through the SAME api_base + api_key. WebAI2API routes by model name.
+#
+# STRATEGY: Each agent uses the SOTA model best suited for its cognitive profile.
+# Cloud free-tier APIs (Groq, Gemini API) serve as fast fallbacks.
+# Mock is last resort.
 
 agents:
   thinker:
     role: "Decompose the goal into a DAG of concrete tasks."
     model:
-      primary: "zai/glm-4.5-flash"
-      fallback: "openrouter/openai/gpt-oss-120b:free"
-      fallback_2: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
+      # Primary: Claude Opus via web bridge — best reasoning + planning
+      primary:
+        model: "anthropic/claude-opus"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 1: GPT-4o via web bridge — strong reasoning
+      fallback:
+        model: "openai/gpt-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 2: DeepSeek R1 via web bridge — reasoning specialist
+      fallback_2:
+        model: "deepseek/deepseek-reasoner"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
     system_prompt_file: "llm/prompts/thinker.j2"
     temperature: 0.2
     max_tokens: 2048
     allow_mock: true
 
   coder:
-    role: "Implement a single task. Output unified diff or new file content."
+    role: "Implement a single task. Output ONLY code blocks."
     model:
-      primary: "openrouter/cohere/north-mini-code:free"
-      fallback: "zai/glm-4.5-flash"
-      fallback_2: "openrouter/qwen/qwen3-coder:free"
+      # Primary: GPT-4o via web bridge — best code generation
+      primary:
+        model: "openai/gpt-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 1: Claude Opus via web bridge — strong code + reasoning
+      fallback:
+        model: "anthropic/claude-opus"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 2: DeepSeek chat via web bridge — code-focused
+      fallback_2:
+        model: "deepseek/deepseek-chat"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
     system_prompt_file: "llm/prompts/coder.j2"
     temperature: 0.1
     max_tokens: 4096
@@ -29,9 +68,18 @@ agents:
   reviewer:
     role: "Approve or reject coder output. List concrete defects only."
     model:
-      primary: "zai/glm-4.5-flash"
-      # fallback: "deepseek/deepseek-chat"
-      fallback: "groq/llama-3.3-70b-versatile"
+      # Primary: Claude Opus — best at finding subtle logic flaws
+      primary:
+        model: "anthropic/claude-opus"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 1: GPT-4o — strong review capability
+      fallback:
+        model: "openai/gpt-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
     system_prompt_file: "llm/prompts/reviewer.j2"
     temperature: 0.0
     max_tokens: 1024
@@ -40,9 +88,18 @@ agents:
   bugfixer:
     role: "Apply reviewer's defect list to the coder's prior output."
     model:
-      primary: "openrouter/qwen/qwen3-coder:free"
-      fallback: "openrouter/cohere/north-mini-code:free"
-      fallback_2: "zai/glm-4.5-flash"
+      # Primary: GPT-4o — best at targeted code edits
+      primary:
+        model: "openai/gpt-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 1: Claude Opus — strong code + reasoning
+      fallback:
+        model: "anthropic/claude-opus"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
     system_prompt_file: "llm/prompts/bugfixer.j2"
     temperature: 0.1
     max_tokens: 4096
@@ -51,9 +108,18 @@ agents:
   researcher:
     role: "Web-ground a task flagged needs_research=true."
     model:
-      primary: "openrouter/openai/gpt-oss-120b:free"
-      fallback: "openrouter/qwen/qwen3-next-80b-a3b-instruct:free"
-      fallback_2: "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      # Primary: Gemini via web bridge — 1M context for RAG, search grounding
+      primary:
+        model: "google/gemini-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
+      # Fallback 1: GPT-4o — strong synthesis
+      fallback:
+        model: "openai/gpt-pro"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 120
     system_prompt_file: "llm/prompts/researcher.j2"
     temperature: 0.3
     max_tokens: 2048
@@ -61,3 +127,19 @@ agents:
     needs_tools: ["web"]
 
 # The orchestrator is NOT here — it's a Python DAG executor, not an agent.
+#
+# MULTI-PROVIDER STRATEGY:
+#   Thinker:  Claude Opus (best reasoning) → GPT-4o → DeepSeek R1
+#   Coder:    GPT-4o (best code gen) → Claude Opus → DeepSeek chat
+#   Reviewer: Claude Opus (best at finding flaws) → GPT-4o
+#   Bugfixer: GPT-4o (best at targeted edits) → Claude Opus
+#   Researcher: Gemini (1M context + search) → GPT-4o
+#
+# NOTES:
+#   - All SOTA models go through the SAME WebAI2API bridge (localhost:3006)
+#   - WebAI2API routes by model name (openai/* → ChatGPT, anthropic/* → Claude, etc.)
+#   - If WebAI2API is down, chain falls through to mock
+#   - To add cloud free-tier fallbacks, add string entries after the bridge entries:
+#       fallback_3: "groq/llama-3.3-70b-versatile"
+#   - Verify bridge is up: curl http://localhost:3006/v1/models
+#   - Prompt logs: logs/prompts/{timestamp}_{agent}_{model}.txt

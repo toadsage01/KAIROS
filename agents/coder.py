@@ -2,8 +2,10 @@
 record AND writes real files into the per-task worktree."""
 from __future__ import annotations
 
-from agents.base import AgentContext, BaseAgent
-from core.parser import parse_coder_output
+from typing import Any
+
+from agents.base import AgentBlocked, AgentContext, BaseAgent
+from core.parser import extract_blocked, parse_coder_output
 
 
 def _looks_like_placeholder_path(path: str, existing: list[str]) -> bool:
@@ -23,6 +25,13 @@ def _single_existing_source(existing: list[str]) -> str | None:
 
 class CoderAgent(BaseAgent):
     name = "coder"
+
+    def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
+        vars_ = super().template_vars(ctx)
+        if ctx.extra and ctx.extra.get("retrieval"):
+            vars_["compressed_state_md_slice"] = ctx.extra["retrieval"]
+            vars_["relevant_file_tree_or_ast_summary"] = ctx.extra["retrieval"]
+        return vars_
 
     def build_prompt(self, ctx: AgentContext) -> str:
         task = ctx.task or {}
@@ -63,6 +72,10 @@ class CoderAgent(BaseAgent):
         return "\n".join(parts)
 
     def write_output(self, ctx: AgentContext, model_output: str) -> str:
+        blocked = extract_blocked(model_output)
+        if blocked:
+            raise AgentBlocked(blocked)
+
         # 1. Always write the audit record to state/changes/{task_id}.md
         path = self.state.write_md(ctx.task_id, model_output, subdir="changes")
         # 2. Parse fenced blocks with path= headers and write real files
@@ -75,7 +88,10 @@ class CoderAgent(BaseAgent):
             for blk in blocks:
                 if single_source and _looks_like_placeholder_path(blk.path, existing):
                     blk.path = single_source
-                ctx.worktree.write_file(blk.path, blk.content)
+                if blk.action == "delete":
+                    ctx.worktree.delete_file(blk.path)
+                else:
+                    ctx.worktree.write_file(blk.path, blk.content)
             ctx.worktree.commit(f"myforge: coder output for {ctx.task_id}")
             self.state.append_log(
                 f"coder task={ctx.task_id} wrote {len(blocks)} file(s) to worktree"
