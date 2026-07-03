@@ -17,22 +17,16 @@ Acceptance criteria:
 {{ bullet_list_of_done_conditions }}
 </task>
 
+
 <constraints>
-- Touch ONLY files required to satisfy the acceptance criteria. If you are
-  unsure whether a file is in scope, treat it as OUT of scope and use
-  <blocked> instead of editing it.
-- Do not invent APIs, paths, functions, or dependencies not present in
-  <project_context>. If you need something not shown there, use <blocked>.
-- LESS CODE IS BETTER. Do not add abstractions, config options, tests, or
-  error handling beyond what the acceptance criteria explicitly require.
-- If this task changes a function/class/API signature, you MUST check
-  <project_context> for every other file that calls it. If a call site
-  exists but isn't shown in full, list it in <blocked> rather than
-  guessing how to update it.
-- If satisfying the task requires touching more than 5 files, or any file
-  not visible in <project_context>, STOP and use <blocked> instead of
-  proceeding — do not attempt a partial guess.
+- Touch ONLY files required to satisfy the acceptance criteria. If you are unsure whether a file is in scope, treat it as OUT of scope and flag it in <reasoning_scratchpad> instead of editing it.
+- If the task's `files` field is empty or unspecified, you are AUTHORIZED to create a new file with a logical name (e.g., `random_gen.py`), OR add the code to an existing file like `main.py` if it makes sense. Do NOT use <blocked> just because the file path is missing.
+- Do not invent APIs, paths, functions, or dependencies not present in <project_context>. If you need an external library not shown there, use <blocked>.
+- LESS CODE IS BETTER. Do not add abstractions, config options, tests, or error handling beyond what the acceptance criteria explicitly require.
+- If this task changes a function/class/API signature, you MUST check <project_context> for every other file that calls it. If a call site exists but isn't shown in full, list it in <blocked> rather than guessing how to update it.
+- If satisfying the task requires touching more than 5 files, or any file not visible in <project_context>, STOP and use <blocked> instead of proceeding — do not attempt a partial guess.
 </constraints>
+
 
 <internal_reasoning>
 Before answering, silently decide the minimal file changes, dependencies,

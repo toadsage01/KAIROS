@@ -18,7 +18,7 @@ agents:
     model:
       # Primary: Claude Opus via web bridge — best reasoning + planning
       primary:
-        model: "anthropic/claude-opus"
+        model: "openai/gpt-pro"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 120
@@ -70,7 +70,7 @@ agents:
     model:
       # Primary: Claude Opus — best at finding subtle logic flaws
       primary:
-        model: "anthropic/claude-opus"
+        model: "openai/gpt-pro"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 120

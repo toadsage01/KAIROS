@@ -211,11 +211,6 @@ def _mock_response(agent: str, prompt: str, role: str) -> str:
 
 def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
                   temperature: float, max_tokens: int) -> str:
-    """Single LiteLLM call. Raises on failure.
-
-    Passes api_base and api_key when set (web bridge mode). Cloud APIs
-    (no api_base) use LiteLLM's default routing via env vars.
-    """
     if not _HAS_LITELLM:
         raise RuntimeError("litellm not installed")
     messages = [
@@ -229,15 +224,20 @@ def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
         "max_tokens": max_tokens,
         "num_retries": endpoint.num_retries,
         "request_timeout": endpoint.request_timeout,
+        "stream": True,  # <--- ADD THIS LINE
     }
-    # Web bridge: pass api_base + api_key so LiteLLM hits our local proxy
     if endpoint.api_base:
         kwargs["api_base"] = endpoint.api_base
     if endpoint.api_key:
         kwargs["api_key"] = endpoint.api_key
-    resp = litellm.completion(**kwargs)
-    return resp.choices[0].message.content  # type: ignore
-
+        
+    # When streaming, we must concatenate the chunks
+    response = litellm.completion(**kwargs)
+    full_text = ""
+    for chunk in response:
+        delta = chunk.choices[0].delta.content or ""
+        full_text += delta
+    return full_text
 
 def _log_fallback(agent: str, endpoint: ModelEndpoint, err: Exception,
                   next_label: str | None) -> None:

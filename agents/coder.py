@@ -28,6 +28,13 @@ class CoderAgent(BaseAgent):
 
     def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
         vars_ = super().template_vars(ctx)
+        task = ctx.task or {}
+        
+        # Map the task dictionary to the Jinja variables in coder.j2
+        vars_["task_id"] = ctx.task_id
+        vars_["specific_task_description"] = task.get("description", "No description provided.")
+        vars_["bullet_list_of_done_conditions"] = task.get("acceptance_criteria", "No criteria provided.")
+        
         if ctx.extra and ctx.extra.get("retrieval"):
             vars_["compressed_state_md_slice"] = ctx.extra["retrieval"]
             vars_["relevant_file_tree_or_ast_summary"] = ctx.extra["retrieval"]

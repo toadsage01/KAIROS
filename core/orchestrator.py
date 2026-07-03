@@ -56,40 +56,41 @@ _AGENT_CLASSES: dict[str, type[BaseAgent]] = {
 }
 
 
-def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
-    """Parse the thinker's plan.md into a list of task dicts."""
-    tasks: list[dict[str, Any]] = []
-    # Split on "## Task <id>"
-    blocks = re.split(r"^## Task\s+", plan_md, flags=re.MULTILINE)
-    for blk in blocks[1:]:
-        lines = blk.strip().splitlines()
-        if not lines:
-            continue
-            
-        # CRITICAL FIX: Enforce strict T1/T2 format from the header.
-        header_id_match = re.match(r"^(T\d+)", lines[0].strip())
-        if not header_id_match:
-            continue  # Skip if the header doesn't start with T1, T2, etc.
-            
-        task_id = header_id_match.group(1)
-        task: dict[str, Any] = {"id": task_id}
-        
-        for ln in lines[1:]:
-            m = re.match(r"^-\s+(\w+):\s*(.*)$", ln)
-            if m:
-                k, v = m.group(1), m.group(2).strip()
-                # Ignore the LLM's "- id:" line so it can't overwrite the header!
-                if k == "id":
-                    continue
-                if k in ("needs_research",):
-                    task[k] = v.lower() == "true"
-                elif k == "files":
-                    task[k] = v.strip().strip("\"'")
-                else:
-                    task[k] = v
-        tasks.append(task)
-    return tasks
+import json
 
+def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
+    """Parse the thinker's plain-text output into a list of task dicts."""
+    tasks: list[dict[str, Any]] = []
+    
+    # Match "TASK T1" (no markdown hashes)
+    task_blocks = re.split(r"^TASK\s+(T\d+)", plan_md, flags=re.MULTILINE)
+    
+    for i in range(1, len(task_blocks), 2):
+        task_id = task_blocks[i]
+        block = task_blocks[i+1]
+        
+        task = {"id": task_id}
+        
+        # Updated regex: looks for "key: value" without the hyphen
+        pattern = r"(\w+):\s*(.*?)(?=\n\w+:|\Z)"
+        
+        for match in re.finditer(pattern, block, re.DOTALL):
+            k = match.group(1).strip()
+            v = match.group(2).strip()
+            
+            if k == "id":
+                continue  # We already have it from the header
+            if k in ("needs_research",):
+                task[k] = v.lower() == "true"
+            elif k == "files":
+                task[k] = v.strip().strip("\"'")
+            else:
+                task[k] = v
+                
+        if task.get("title"):
+            tasks.append(task)
+            
+    return tasks
 
 def _parse_review_status(review_md: str) -> str:
     """Return the review status from a review file."""
