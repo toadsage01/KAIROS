@@ -1,0 +1,64 @@
+# Wisdom OS / Kairos — handwritten notes, structured
+
+## 1. Core philosophy — "Wild Wide Mind"
+- Knowledge conversion to Wisdom is described as very important and fruitful, Quite obvious when we are having scattered information or patterns knowledge everywhere - these shoudl be utilised effectively to be converted into proper insight, actions, learning, basically into wisdom.
+- Scope goes beyond direct academic/STEM (while the ui below mentioned as infinite canvas covering all the topics whichever I'm involved in. Although most are related to Academic, STEM, Buisness, Work etc. But there are some categorizable nodes are there, mentioned ahead)— categories panning over into:
+  - **People** — their basic details, important notes, work related with them, further actions etc. let's say I'm working on several unique projects with different person each, It'd be easier to have their information in one place, allowing me to take easier insight or action. — indirect, inspirational, weird.
+  - **My life log & diary input** so i don't repeat a mistake again, or keep in mind things playing for a better daily learning curve. 
+  - **"Mystics"** (noted as "just a cool name") — actually meaning history, religion, love/mate, events, autopsy
+  We need not categorize things manually ourselves, rather the curator should do that.
+
+## 2. Three core features 
+
+**Core 1 — Smart Aggregator & Curator**
+These two (for now or boss agents) I except to handle the heavy lifting. Within my project KAIROS, I'll be building a memory pool. This memory pool will have all the llm chats that I've had, all browser searches, my physical notes, websites, youtube videos, medias etc. I am not sure whether if to keep everything in the memory pool itself smartly or only the llm chats because kairos's agent framework is related to project building, but it also might need related research files. So perhaps memory pool within kairos core system is a better strategy. Now this will be huge huge data, so we need to store things, manage things, process thigns in efficient ways to avoid any duplicacy, erradication redundancy, tagged, interlinked what's connect etc. etc. We need to research this further. 
+Data from this Memory pool will be efficiently converted into smart and neatly organized system visualised within our wisdom os (pool cave peak whatever name, we will name this as wisdom cave perhaps). the data from memory pool which has been managed or processed can be deleted to save storage. Any new inclusion should be smartly veririfed by another agent (maybe curator boss agent pups). If something new is there It can be appended, if something has changed/updated, update the formattable data like text. If a sub topic comes between already stored two major topics, agent should place it in between. All after ensuring it's right fit in the canvas.
+
+**Core 2 — Visualisation (Tree ↔ Leaf)** Now visualisation can be of two or three types. One basic one which would look like a folder structure with main and sub and leaf categories or nodes or pages. And the Main innovative breakthrough visualisation will be a open canvas. This canvas doesn't needs to render everything at once, only the things in focus or hovered or dragging one place to another (not moving, moving will be moving). one of the image in the picture tries to represent it. Hidden arrows connects related notes or knowledge. Arrow colors can define if something is a sub or sibling or parent topic along with arrows head on the ends. Arrow edge thickness can represent density of connections. Denser edge can be calculated to visualise nodes of different characteristics when viewing knowledge (graph mode). The canvas must be able to feature the topics and contents effectively and dynamically. Let's say I was studying about Anthropic. A page for anthropic text based, pleasingly mixed with other format of notes, like a iframe, or a ai generated graph or chart or image. HyperLinks, photos, etc. etc. 
+Togglers represnting highlighted color fields marking a topic territory, efficiently with subtle color (almost transparent) diffrences since there will be many topics. Node connection view toggler, View toggler to switch between file system design to open whitespace canvas design. 
+
+
+All the topics sub topics within the Wisdom OS with this beautiful Open Canvas visualisation, will follow -
+- Incorporating Bloom's Taxonomy, for efficient learning. All layers of it can be tracked for each topic. and spaced revision technique aswell. 
+- verbal discussion + questionnaire at related stage of the above bloom taxonomy mentioned.
+- Output as either a dynamic webpage, and dynamic markdown as fallback (In case somewhere data is too big and can't be rendered)
+- Elaborated separately as "Core 2 — problem of navigation": visualization between a main category, its jurisdiction, relations, and subs is solved/discussed above
+
+**Core 3 — Dashboard & Butler**
+- Reminder system for revision: deadlines, articles, and files
+- Dashboard can have several metric measurement for tracking my progress 
+- Highlights a portion pulled from Core 2, according to revision/discussion when revisting something
+
+## 4. Resource inputs (both live & previous)
+- All chat exports from LLMs
+- Search history grepped main education/topic sites
+- My notes on main topics — physical
+- Media consumed per topic: YouTube, iframes, podcasts, digital notes
+
+## dynamic parent folder dashboard (one of the visualisation mode)
+- A parent-folder-like dashboard: lists, numerable metrics, hierarchical topology of your knowledge
+
+
+Search words along related words, with percent matching
+
+## 7. Other Agent persona ideas
+- **Teacher** — adapts to whatever way you best understand
+- **Scientist/Engineer** — has access to `/web`, `/watch`, `/listen` and other tools (need to add more after research)
+  - YouTube or audio files (manual tool)
+  - Live session — not for now, just transcript from let's say a video call meeting. 
+
+## 8. Navigation & content canvas detail
+- "Endless canvas" — default consumption view, limited to acquired space
+
+## 9. Kairos backend architecture sketch
+*(this page is about Kairos infrastructure as i was penning kairos graph on same page (which to note is not accurate neither detailed ), not Wisdom OS specifically — )*
+
+- `agents.yaml` defines web chat adapters for OpenAI, Anthropic, DeepSeek, Gemini, and zai
+- Flow sketch: Prompt → Parser → API, with Coder/Research/Thinker as consumers of the Prompt stage, and an Orchestrator/DAG loop
+- Ports noted: WebAI2API on 3006, API on 8000, local-or-cloud on 8080, UI on 8501
+- Free tier providers: Google Colab, and Kaggle (T4x2 GPU) running `[unclear: "Ornith-1.0-35B MoE" — matches a model name from your other notes, but flagging since the handwriting is compressed]`
+- Deployment/tools noted: Vercel, GitNexus:3000, OpenSpec, CodeGraph, Dynamic Agentic DAG, GUI, Prompt Tools, MCP Gateway & Tools, OpenDesign, CLI
+
+## 10. Business/rollout note
+- While working on several projects, after building and using your own tools — Kairos {wisdom, s/w company, ...}
+- Planned path: get patents, license, then give to insiders for continued testing, before direct public marketing

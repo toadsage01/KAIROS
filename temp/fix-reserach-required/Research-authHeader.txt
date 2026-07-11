@@ -1,0 +1,4 @@
+The "Unauthorized" error is a SEPARATE issue
+You wrote: "For the errors logged, http://localhost:3006/v1/chat/completions printed {"error":{"message":"Unauthorized (Invalid or Missing Token)"...}}"
+
+That happened because you (or your browser, or a follow-up test) hit the URL without the Authorization header. That's the server correctly rejecting an unauthenticated request. It's NOT what caused the curl failures — it's a different test you ran.

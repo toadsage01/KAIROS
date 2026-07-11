@@ -208,6 +208,20 @@ def _mock_response(agent: str, prompt: str, role: str) -> str:
         )
     return f"[mock {agent}] {role}"
 
+def _validate_response(text: str, endpoint: ModelEndpoint) -> str:
+    """Catch HTML/garbage responses from web bridges before they pollute state."""
+    if not text or not text.strip():
+        raise RuntimeError(f"empty response from {endpoint.display_name}")
+    lower = text.lower()[:500]
+    if "<html" in lower or "<!doctype" in lower:
+        raise RuntimeError(
+            f"HTML response from {endpoint.display_name} — likely Cloudflare "
+            f"block or session expiry. First 200 chars: {text[:200]!r}"
+        )
+    if len(text) > 100_000:
+        raise RuntimeError(f"oversized response from {endpoint.display_name}")
+    return text
+
 
 def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
                   temperature: float, max_tokens: int) -> str:
@@ -237,7 +251,7 @@ def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
     for chunk in response:
         delta = chunk.choices[0].delta.content or ""
         full_text += delta
-    return full_text
+    return _validate_response(full_text, endpoint)
 
 def _log_fallback(agent: str, endpoint: ModelEndpoint, err: Exception,
                   next_label: str | None) -> None:

@@ -134,20 +134,17 @@ def _single_source_file(repo_root: str) -> str:
     return candidates[0] if len(candidates) == 1 else ""
 
 
-def _sanitize_tasks(
-    tasks: list[dict[str, Any]],
-    goal: str,
-    repo_root: str,
-    max_tasks: int,
-) -> list[dict[str, Any]]:
-    """Constrain LLM plans to implementation tasks myforge can safely run."""
-    clean: list[dict[str, Any]] = []
+def _sanitize_tasks(tasks, goal, repo_root, max_tasks):
+    REQUIRED = {"id", "title", "description", "acceptance_criteria"}
+    clean = []
     default_file = _single_source_file(repo_root)
-
     for task in tasks:
+        if not REQUIRED.issubset(task.keys()):
+            continue  # ← reject malformed tasks instead of passing them through
         if _is_meta_task(task, goal):
             continue
         normalized = dict(task)
+        # ... rest of existing logic
         if not str(normalized.get("files", "")).strip() and default_file:
             normalized["files"] = default_file
         normalized["needs_research"] = bool(normalized.get("needs_research")) and not default_file

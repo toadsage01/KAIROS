@@ -5,6 +5,7 @@ from typing import Any
 
 from agents.base import AgentBlocked, AgentContext, BaseAgent
 from core.parser import extract_blocked
+from llm.normalizer import normalize_plan
 
 
 class ThinkerAgent(BaseAgent):
@@ -27,10 +28,19 @@ class ThinkerAgent(BaseAgent):
         })
         return vars_
 
-    def write_output(self, ctx: AgentContext, model_output: str) -> str:
-        blocked = extract_blocked(model_output)
-        if blocked:
-            raise AgentBlocked(blocked)
-
-        path = self.state.write_md("plan", model_output)
-        return str(path)
+    def write_output(self, ctx, model_output: str) -> str:
+        # 1. Try to parse + validate via normalizer
+        plan = normalize_plan(model_output)
+        # 2. Serialize back to the plain-text format your parser expects
+        if plan.is_blocked:
+            raise AgentBlocked(plan.blocked_reason)
+        serialized = []
+        for t in plan.tasks:
+            serialized.append(
+                f"TASK {t.id}\nid: {t.id}\ntitle: {t.title}\n"
+                f"description: {t.description}\ndepends_on: {t.depends_on}\n"
+                f"acceptance_criteria: {t.acceptance_criteria}\n"
+                f"needs_research: {str(t.needs_research).lower()}\nfiles: {t.files}\n"
+            )
+        plan_md = "\n".join(serialized)
+        return str(self.state.write_md("plan", plan_md))

@@ -89,7 +89,15 @@ class CoderAgent(BaseAgent):
         if ctx.worktree is not None:
             blocks = parse_coder_output(model_output, task=ctx.task, task_id=ctx.task_id)
             if not blocks:
-                raise ValueError("coder output did not contain any writable code blocks")
+                # Fix 4: try normalizer fallback before failing
+                try:
+                    from llm.normalizer import normalize_coder_output
+                    blocks = normalize_coder_output(model_output, ctx.task, ctx.task_id)
+                except Exception:
+                    raise ValueError(
+                        f"coder output did not contain any writable code blocks. "
+                        f"First 200 chars: {model_output[:200]!r}"
+                    )
             existing = ctx.worktree.list_files()
             single_source = _single_existing_source(existing)
             for blk in blocks:
