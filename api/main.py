@@ -50,7 +50,9 @@ def _get_orch() -> Orchestrator:
     if _orch is None:
         _orch = Orchestrator(state_dir=STATE_DIR, config_dir=CONFIG_DIR)
         # Register job handlers — these run in the background worker thread
-        register_handler("start", lambda payload: _orch.start(payload["goal"]).to_dict())
+        register_handler("start", lambda payload: _orch.start(
+            payload["goal"], payload.get("workspace_path")
+        ).to_dict())
         register_handler("step", lambda payload: _orch.step().to_dict())
         register_handler("approve", lambda payload: _orch.approve(
             payload["gate"], payload.get("decision", "approved"), payload.get("note", "")
@@ -77,6 +79,7 @@ def _get_orch() -> Orchestrator:
 # ---------- models ----------
 class RunRequest(BaseModel):
     goal: str | None = None  # if None, advance existing run
+    workspace_path: str | None = None  # Batch 3: per-run workspace selection
 
 
 class ApproveRequest(BaseModel):
@@ -104,7 +107,10 @@ def run(req: RunRequest):
     """Enqueue a run job. Returns immediately with the job_id."""
     orch = _get_orch()
     if req.goal:
-        job = get_job_queue().enqueue("start", {"goal": req.goal})
+        payload = {"goal": req.goal}
+        if req.workspace_path:
+            payload["workspace_path"] = req.workspace_path
+        job = get_job_queue().enqueue("start", payload)
     else:
         job = get_job_queue().enqueue("step", {})
     return {

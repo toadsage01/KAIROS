@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 import yaml
 
-from agents.base import AgentBlocked, AgentContext, BaseAgent
+from agents.base import AgentContext, BaseAgent
 from agents.thinker import ThinkerAgent
 from agents.coder import CoderAgent
 from agents.reviewer import ReviewerAgent
@@ -44,6 +44,7 @@ from llm.router import load_agents
 from memory.codemap import CodeMap
 from memory.retriever import Indexer, Retriever
 from memory.vectorstore import VectorStore
+from tools.registry import get_tool_registry
 
 RunStatus = Literal["running", "paused", "done", "error"]
 
@@ -56,44 +57,31 @@ _AGENT_CLASSES: dict[str, type[BaseAgent]] = {
 }
 
 
-import json
-
 def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
-    """Parse the thinker's plain-text output into a list of task dicts."""
+    """Parse the thinker's plan.md into a list of task dicts."""
     tasks: list[dict[str, Any]] = []
-    
-    # Match "TASK T1" (no markdown hashes)
-    task_blocks = re.split(r"^TASK\s+(T\d+)", plan_md, flags=re.MULTILINE)
-    
-    for i in range(1, len(task_blocks), 2):
-        task_id = task_blocks[i]
-        block = task_blocks[i+1]
-        
-        task = {"id": task_id}
-        
-        # Updated regex: looks for "key: value" without the hyphen
-        pattern = r"(\w+):\s*(.*?)(?=\n\w+:|\Z)"
-        
-        for match in re.finditer(pattern, block, re.DOTALL):
-            k = match.group(1).strip()
-            v = match.group(2).strip()
-            
-            if k == "id":
-                continue  # We already have it from the header
-            if k in ("needs_research",):
-                task[k] = v.lower() == "true"
-            elif k == "files":
-                task[k] = v.strip().strip("\"'")
-            else:
-                task[k] = v
-                
-        if task.get("title"):
-            tasks.append(task)
-            
+    # Split on "## Task <id>"
+    blocks = re.split(r"^## Task\s+", plan_md, flags=re.MULTILINE)
+    for blk in blocks[1:]:
+        lines = blk.strip().splitlines()
+        if not lines:
+            continue
+        task_id = lines[0].strip()
+        task: dict[str, Any] = {"id": task_id}
+        for ln in lines[1:]:
+            m = re.match(r"^-\s+(\w+):\s*(.*)$", ln)
+            if m:
+                k, v = m.group(1), m.group(2).strip()
+                if k in ("needs_research",):
+                    task[k] = v.lower() == "true"
+                else:
+                    task[k] = v
+        tasks.append(task)
     return tasks
 
+
 def _parse_review_status(review_md: str) -> str:
-    """Return the review status from a review file."""
+    """Return 'approved' or 'rejected' from a review file."""
     # First check our injected header
     m = re.search(r"<!-- status: (\w+) -->", review_md)
     if m:
@@ -101,61 +89,6 @@ def _parse_review_status(review_md: str) -> str:
     # Fallback: first STATUS: line
     m = re.search(r"STATUS:\s*(\w+)", review_md, re.IGNORECASE)
     return m.group(1).lower() if m else "rejected"
-
-
-def _is_meta_task(task: dict[str, Any], goal: str) -> bool:
-    """Return True for tasks that are analysis/research/test chores, not edits."""
-    title = str(task.get("title", "")).lower()
-    description = str(task.get("description", "")).lower()
-    text = f"{title} {description}"
-    goal_l = goal.lower()
-
-    if any(w in goal_l for w in ("test", "verify", "research", "analyze", "analyse")):
-        return False
-
-    meta_starts = (
-        "analyze", "analyse", "examine", "investigate", "research",
-        "review current", "test ", "verify ", "validate current",
-    )
-    return title.startswith(meta_starts) or (
-        any(w in text for w in ("identify where", "validation gaps", "current structure"))
-        and "implement" not in title
-    )
-
-
-def _single_source_file(repo_root: str) -> str:
-    root = Path(repo_root)
-    candidates: list[str] = []
-    for p in root.rglob("*"):
-        if not p.is_file() or ".git" in p.parts or ".worktrees" in p.parts:
-            continue
-        if p.suffix in {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs"}:
-            candidates.append(str(p.relative_to(root)))
-    return candidates[0] if len(candidates) == 1 else ""
-
-
-def _sanitize_tasks(tasks, goal, repo_root, max_tasks):
-    REQUIRED = {"id", "title", "description", "acceptance_criteria"}
-    clean = []
-    default_file = _single_source_file(repo_root)
-    for task in tasks:
-        if not REQUIRED.issubset(task.keys()):
-            continue  # ← reject malformed tasks instead of passing them through
-        if _is_meta_task(task, goal):
-            continue
-        normalized = dict(task)
-        # ... rest of existing logic
-        if not str(normalized.get("files", "")).strip() and default_file:
-            normalized["files"] = default_file
-        normalized["needs_research"] = bool(normalized.get("needs_research")) and not default_file
-        clean.append(normalized)
-        if len(clean) >= max_tasks:
-            break
-
-    if clean:
-        return clean
-
-    return []
 
 
 @dataclass
@@ -209,6 +142,9 @@ class Orchestrator:
         self.codemap = CodeMap(repo_root=self.dag.target_repo)
         self.retriever = Retriever(self.vector, self.codemap)
         self._indexed = False
+        # Batch 3: tool registry + per-run workspace
+        self.tool_registry = get_tool_registry()
+        self.workspace_path: Path = Path(self.dag.target_repo)
 
     def _ensure_indexed(self) -> None:
         """Lazily index the target repo the first time the coder needs context."""
@@ -216,9 +152,9 @@ class Orchestrator:
             return
         try:
             indexer = Indexer(self.vector, self.codemap)
-            stats = indexer.index_repo(self.dag.target_repo)
+            stats = indexer.index_repo(str(self.workspace_path))
             self.state.append_log(
-                f"indexed target_repo: {stats.get('files', 0)} files, "
+                f"indexed workspace: {stats.get('files', 0)} files, "
                 f"{stats.get('chunks', 0)} chunks (vector available={self.vector.available})"
             )
         except Exception as e:  # noqa: BLE001
@@ -226,10 +162,23 @@ class Orchestrator:
         self._indexed = True
 
     # ---------- public API ----------
-    def start(self, goal: str) -> RunState:
-        """Initialize a new run. Wipes state/tasks.json."""
+    def start(self, goal: str, workspace_path: str | None = None) -> RunState:
+        """Initialize a new run. Wipes state/tasks.json.
+
+        Args:
+            goal: The task goal
+            workspace_path: Optional path to the target repo for this run.
+                           If None, uses MYFORGE_TARGET_REPO from env.
+        """
         if not goal.strip():
             raise ValueError("goal must be non-empty")
+        # Batch 3: per-run workspace
+        if workspace_path:
+            self.workspace_path = Path(workspace_path).resolve()
+            self.workspace = WorkspaceManager(str(self.workspace_path))
+            self.codemap.repo_root = str(self.workspace_path)
+            self._indexed = False  # force re-index for new workspace
+            self.state.append_log(f"workspace set: {self.workspace_path}")
         self.state.set_goal(goal)
         rs = RunState(status="running", current_node_id=self.dag.entry)
         self._persist(rs)
@@ -280,12 +229,6 @@ class Orchestrator:
             rs.last_step_at = time.strftime("%Y-%m-%dT%H:%M:%S")
             try:
                 rs = self._execute_node(rs, node)
-            except AgentBlocked as e:
-                rs.last_error = f"agent declined: {e.reason}"
-                self.state.append_log(
-                    f"agent declined at node={node.id}: {e.reason}"
-                )
-                break
             except Exception as e:  # noqa: BLE001
                 rs.status = "error"
                 rs.last_error = f"{type(e).__name__}: {e}"
@@ -326,6 +269,7 @@ class Orchestrator:
             # Fire completion notification (Telegram, future channels)
             try:
                 goal = self.state.get_goal() or ""
+                # Extract just the goal text from the markdown
                 import re
                 m = re.search(r"^# Goal\n\n(.+?)(?:\n|$)", goal, re.DOTALL)
                 goal_text = m.group(1).strip() if m else goal[:200]
@@ -362,18 +306,11 @@ class Orchestrator:
             task_id = rs.tasks[rs.current_task_index]["id"]
             review_md = self.state.read_md(task_id, subdir="review") or ""
             decision = _parse_review_status(review_md)
-            routing_decision = "rejected" if decision == "unverifiable" else decision
             iters = rs.review_iterations.get(task_id, 0) + 1
             rs.review_iterations[task_id] = iters
-            if decision != "approved":
+            if iters > self.dag.max_review_iterations and decision == "rejected":
                 self.state.append_log(
-                    f"task {task_id}: review decision={decision} "
-                    f"(routing={routing_decision}) iteration={iters}"
-                )
-            if iters > self.dag.max_review_iterations and decision != "approved":
-                self.state.append_log(
-                    f"task {task_id}: max review iterations exceeded after "
-                    f"{decision}, aborting worktree"
+                    f"task {task_id}: max review iterations exceeded, aborting worktree"
                 )
                 # Abort the worktree — its branch is discarded
                 try:
@@ -381,32 +318,28 @@ class Orchestrator:
                 except Exception as e:  # noqa: BLE001
                     self.state.append_log(f"worktree abort failed: {e}")
                 rs.status = "error"
-                rs.last_error = (
-                    f"task {task_id} {decision} after {iters} iterations"
-                )
+                rs.last_error = f"task {task_id} rejected after {iters} iterations"
                 return rs
-            next_node = self.dag.next_node(node.id, routing_decision)
+            next_node = self.dag.next_node(node.id, decision)
             if next_node is None:
                 rs.status = "error"
                 rs.last_error = f"no next node from branch {node.id}"
                 return rs
             # On approval, merge the worktree's branch back to the target repo.
-            if decision == "approved" and next_node.kind == "terminal":
+            if decision == "approved" and next_node.id in ("done",):
                 try:
                     sha = self.workspace.for_task(task_id).merge_to_target()
                     self.state.append_log(
                         f"task {task_id} approved; merged branch myforge/{task_id} "
                         f"-> target_repo (sha={sha[:8]})"
-                )
-                    self._indexed = False  # force re-index on next coder call
-                    
+                    )
                 except Exception as e:  # noqa: BLE001
                     rs.status = "error"
                     rs.last_error = f"merge failed for task {task_id}: {e}"
                     return rs
             # Multi-task loop: if branch approved -> "done" AND we have more
             # tasks, advance task index and go back to coder for the next one.
-            if (next_node.kind == "terminal" and decision == "approved"
+            if (next_node.id == "done" and decision == "approved"
                     and rs.current_task_index < len(rs.tasks) - 1):
                 rs.current_task_index += 1
                 rs.current_node_id = "coder"
@@ -439,18 +372,7 @@ class Orchestrator:
             agent.run(ctx)
             # Parse plan.md into tasks
             plan_md = self.state.read_md("plan") or ""
-            goal = self.state.get_goal() or ""
-            rs.tasks = _sanitize_tasks(
-                _parse_plan(plan_md),
-                goal=goal,
-                repo_root=self.dag.target_repo,
-                max_tasks=self.dag.max_tasks_per_goal,
-            )
-            if not rs.tasks:
-                rs.status = "error"
-                rs.last_error = "thinker produced no executable tasks"
-                self.state.append_log(rs.last_error)
-                return rs
+            rs.tasks = _parse_plan(plan_md)
             self.state.append_log(f"thinker produced {len(rs.tasks)} tasks")
             rs.current_task_index = 0
             rs.current_node_id = node.next or "hitl_plan"
@@ -498,15 +420,18 @@ class Orchestrator:
                     retrieval_ctx = ""
 
         agent = _AGENT_CLASSES[agent_name](self.state, self.agents_cfg)
-        extra: dict[str, Any] = {
-            "retry_count": rs.review_iterations.get(task_id, 0),
-            "prior_rejection_count": rs.review_iterations.get(task_id, 0),
-        }
-        if retrieval_ctx:
-            extra["retrieval"] = retrieval_ctx
+        # Batch 3: set use_tools + allowed_tools from config
+        agent_cfg = self.agents_cfg.get(agent_name)
+        if agent_cfg and hasattr(agent, "use_tools"):
+            agent.use_tools = agent_cfg.use_tools
+            agent.allowed_tools = agent_cfg.allowed_tools or []
         ctx = AgentContext(
             task_id=task_id, task=task, state=self.state,
-            worktree=wt, extra=extra,
+            worktree=wt,
+            extra={"retrieval": retrieval_ctx} if retrieval_ctx else None,
+            tool_registry=self.tool_registry,
+            workspace_path=self.workspace_path,
+            use_tools=getattr(agent, "use_tools", False),
         )
         agent.run(ctx)
 

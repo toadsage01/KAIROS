@@ -1,10 +1,23 @@
 """Coder — reads task from plan.md, writes changes/{task_id}.md audit
-record AND writes real files into the per-task worktree."""
+record AND writes real files into the per-task worktree.
+
+Batch 2 update: extends ToolAgent so it can optionally use tools
+(read_file, write_file, edit_file, execute, etc.) when use_tools=True.
+
+Preserves ALL Codex helpers:
+  - _looks_like_placeholder_path
+  - _single_existing_source
+  - template_vars() with Jinja2 variable mapping
+  - normalize_coder_output fallback
+  - delete action support
+  - worktree file content injection into prompt
+"""
 from __future__ import annotations
 
 from typing import Any
 
-from agents.base import AgentBlocked, AgentContext, BaseAgent
+from agents.base import AgentBlocked, AgentContext
+from agents.tool_agent import ToolAgent
 from core.parser import extract_blocked, parse_coder_output
 
 
@@ -23,18 +36,33 @@ def _single_existing_source(existing: list[str]) -> str | None:
     return candidates[0] if len(candidates) == 1 else None
 
 
-class CoderAgent(BaseAgent):
+class CoderAgent(ToolAgent):
     name = "coder"
+    # Tools the coder can use (when use_tools=True)
+    use_tools = False  # set True in agents.yaml to enable
+    allowed_tools = [
+        "read_file",      # read existing files
+        "write_file",     # write new files
+        "edit_file",      # targeted edits (safer than full rewrite)
+        "list_dir",       # see what files exist
+        "grep",           # search for patterns in code
+        "glob",           # find files by name
+        "execute",        # run pytest, ruff, python
+        "git_status",     # see what changed
+        "git_diff",       # see diffs
+        "git_commit",     # commit changes
+        "mkdir",          # create directories
+    ]
 
     def template_vars(self, ctx: AgentContext) -> dict[str, Any]:
         vars_ = super().template_vars(ctx)
         task = ctx.task or {}
-        
+
         # Map the task dictionary to the Jinja variables in coder.j2
         vars_["task_id"] = ctx.task_id
         vars_["specific_task_description"] = task.get("description", "No description provided.")
         vars_["bullet_list_of_done_conditions"] = task.get("acceptance_criteria", "No criteria provided.")
-        
+
         if ctx.extra and ctx.extra.get("retrieval"):
             vars_["compressed_state_md_slice"] = ctx.extra["retrieval"]
             vars_["relevant_file_tree_or_ast_summary"] = ctx.extra["retrieval"]

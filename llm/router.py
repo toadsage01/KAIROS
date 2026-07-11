@@ -38,13 +38,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-try:
-    from jinja2 import Environment
-    _HAS_JINJA = True
-except ImportError:
-    Environment = None  # type: ignore
-    _HAS_JINJA = False
-
 # Lazy import — litellm is heavy and we want graceful failure if missing
 try:
     import litellm  # type: ignore
@@ -108,6 +101,9 @@ class AgentConfig:
     max_tokens: int = 2048
     allow_mock: bool = True
     needs_tools: list[str] | None = None
+    # Batch 3: tool support
+    use_tools: bool = False
+    allowed_tools: list[str] = field(default_factory=list)
 
 
 def load_agents(path: str = "config/agents.yaml") -> dict[str, AgentConfig]:
@@ -130,6 +126,8 @@ def load_agents(path: str = "config/agents.yaml") -> dict[str, AgentConfig]:
             max_tokens=a.get("max_tokens", 2048),
             allow_mock=a.get("allow_mock", True),
             needs_tools=a.get("needs_tools"),
+            use_tools=a.get("use_tools", False),
+            allowed_tools=a.get("allowed_tools", []),
         )
     return out
 
@@ -142,18 +140,23 @@ def _load_prompt(path: str) -> str:
 
 
 def _render_prompt_template(template: str, variables: dict[str, Any]) -> str:
-    """Render a system prompt template before sending it to the model."""
+    """Render a system prompt template before sending it to the model.
+
+    Uses Jinja2 if available, otherwise falls back to simple {{ var }} replacement.
+    """
     if not template or "{{" not in template:
         return template
-    if _HAS_JINJA and Environment is not None:
+    try:
+        from jinja2 import Environment
         env = Environment(autoescape=False)
         return env.from_string(template).render(**variables)
-
-    rendered = template
-    for key, value in variables.items():
-        rendered = rendered.replace("{{ " + key + " }}", str(value))
-        rendered = rendered.replace("{{" + key + "}}", str(value))
-    return rendered
+    except ImportError:
+        # Fallback: simple string replacement
+        rendered = template
+        for key, value in variables.items():
+            rendered = rendered.replace("{{ " + key + " }}", str(value))
+            rendered = rendered.replace("{{" + key + "}}", str(value))
+        return rendered
 
 
 def _mock_response(agent: str, prompt: str, role: str) -> str:
@@ -208,6 +211,7 @@ def _mock_response(agent: str, prompt: str, role: str) -> str:
         )
     return f"[mock {agent}] {role}"
 
+
 def _validate_response(text: str, endpoint: ModelEndpoint) -> str:
     """Catch HTML/garbage responses from web bridges before they pollute state."""
     if not text or not text.strip():
@@ -225,6 +229,11 @@ def _validate_response(text: str, endpoint: ModelEndpoint) -> str:
 
 def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
                   temperature: float, max_tokens: int) -> str:
+    """Single LiteLLM call. Raises on failure.
+
+    Passes api_base and api_key when set (web bridge mode). Cloud APIs
+    (no api_base) use LiteLLM's default routing via env vars.
+    """
     if not _HAS_LITELLM:
         raise RuntimeError("litellm not installed")
     messages = [
@@ -238,20 +247,15 @@ def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
         "max_tokens": max_tokens,
         "num_retries": endpoint.num_retries,
         "request_timeout": endpoint.request_timeout,
-        "stream": True,  # <--- ADD THIS LINE
     }
+    # Web bridge: pass api_base + api_key so LiteLLM hits our local proxy
     if endpoint.api_base:
         kwargs["api_base"] = endpoint.api_base
     if endpoint.api_key:
         kwargs["api_key"] = endpoint.api_key
-        
-    # When streaming, we must concatenate the chunks
-    response = litellm.completion(**kwargs)
-    full_text = ""
-    for chunk in response:
-        delta = chunk.choices[0].delta.content or ""
-        full_text += delta
-    return _validate_response(full_text, endpoint)
+    resp = litellm.completion(**kwargs)
+    return resp.choices[0].message.content  # type: ignore
+
 
 def _log_fallback(agent: str, endpoint: ModelEndpoint, err: Exception,
                   next_label: str | None) -> None:

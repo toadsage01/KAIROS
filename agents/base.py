@@ -6,11 +6,16 @@ Agent base class. An agent is exactly:
 
 There is NO framework. No LangChain. No CrewAI. No "agent as a service".
 A subclass implements `build_prompt()` and `write_output()`. That's it.
+
+Batch 2 update: AgentContext now carries tool_registry + workspace_path
+for tool-enabled agents (ToolAgent subclass). Backward compatible —
+existing agents ignore these fields.
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from core.state import FileState
@@ -28,12 +33,22 @@ class AgentBlocked(Exception):
 
 @dataclass
 class AgentContext:
-    """Bounded input passed to an agent invocation."""
+    """Bounded input passed to an agent invocation.
+
+    Batch 2 additions (backward compatible — default to None/False):
+      - tool_registry: ToolRegistry instance (if agent uses tools)
+      - workspace_path: Path to the target repo root (for ToolContext)
+      - use_tools: whether this agent should use the tool loop
+    """
     task_id: str
     task: dict[str, Any] | None  # parsed task from plan.md
     state: FileState
     worktree: Worktree | None = None  # set for coder/reviewer/bugfixer
     extra: dict[str, Any] | None = None
+    # Batch 2: tool support
+    tool_registry: Any | None = None  # ToolRegistry instance (avoid circular import)
+    workspace_path: Path | None = None  # target repo root
+    use_tools: bool = False  # whether to use tool loop
 
 
 class BaseAgent(ABC):
@@ -90,7 +105,11 @@ class BaseAgent(ABC):
         }
 
     def run(self, ctx: AgentContext) -> str:
-        """One LLM call. Writes output. Returns the state file path."""
+        """One LLM call. Writes output. Returns the state file path.
+
+        Tool-enabled agents (ToolAgent subclass) override this to add
+        a tool loop. Base implementation is single-pass.
+        """
         prompt = self.build_prompt(ctx)
         out = route(
             agent_name=self.name,
