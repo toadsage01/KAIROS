@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 import yaml
 
-from agents.base import AgentContext, BaseAgent
+from agents.base import AgentBlocked, AgentContext, BaseAgent
 from agents.thinker import ThinkerAgent
 from agents.coder import CoderAgent
 from agents.reviewer import ReviewerAgent
@@ -58,16 +58,82 @@ _AGENT_CLASSES: dict[str, type[BaseAgent]] = {
 
 
 def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
-    """Parse the thinker's plan.md into a list of task dicts."""
+    """Parse the thinker's plan.md into a list of task dicts.
+    
+    Handles ALL formats SOTA models produce:
+      - "## Task T1" with "- key: value" lines (original)
+      - "TASK T1" with "key: value" lines (Codex)
+      - "TASK 1" with "key: value" lines (DeepSeek/SOTA — no T prefix)
+      - "## Task 1" with "- key: value" lines (mixed)
+    
+    Normalizes all task IDs to "T1", "T2", etc. internally for consistency.
+    """
     tasks: list[dict[str, Any]] = []
-    # Split on "## Task <id>"
+    
+    # Match "TASK <id>" or "## Task <id>" where <id> is ANY non-whitespace token.
+    # SOTA models produce creative IDs: T1, 1, M0, image-search, wireframe, etc.
+    # We accept anything that's not whitespace, then normalize later.
+    task_blocks = re.split(r"(?:^|\n)(?:##\s*)?TASK\s+(\S+)\s*", plan_md, flags=re.IGNORECASE)
+    
+    if len(task_blocks) > 1:
+        for i in range(1, len(task_blocks), 2):
+            raw_id = task_blocks[i].strip()
+            # Keep the original ID as-is (SOTA models produce M0, image-search, etc.)
+            # Only normalize purely numeric IDs: "1" → "T1"
+            if raw_id.isdigit():
+                task_id = f"T{raw_id}"
+            else:
+                task_id = raw_id
+            block = task_blocks[i + 1]
+            task: dict[str, Any] = {"id": task_id}
+            
+            # Parse "key: value" pairs. The SOTA model may put them on
+            # separate lines OR all on one line. This pattern handles both:
+            #   - "id: 1\ntitle: Setup..."  (separate lines)
+            #   - "id: 1 title: Setup..."   (single line, space-separated)
+            # The lookahead checks for the next "word:" pattern.
+            pattern = r"(\w+):\s*(.*?)(?=\s+(?:\w+:)|\Z)"
+            for match in re.finditer(pattern, block, re.DOTALL):
+                k = match.group(1).strip()
+                v = match.group(2).strip()
+                if k.lower() == "id":
+                    # Override the normalized ID with the actual value if present,
+                    # but keep it normalized to T<n> format
+                    continue
+                if k.lower() in ("needs_research",):
+                    task["needs_research"] = v.lower() == "true"
+                elif k.lower() == "files":
+                    task["files"] = v.strip().strip("\"'").strip()
+                elif k.lower() == "depends_on":
+                    # Parse list format: ['1', '2'] or [1, 2] or 1,2
+                    deps = v.strip()
+                    if deps.startswith("["):
+                        deps = deps.strip("[]")
+                    dep_list = [d.strip().strip("'\"") for d in deps.split(",") if d.strip()]
+                    # Keep dep IDs as-is (SOTA models use M0, image-search, etc.)
+                    # Only normalize purely numeric deps: "1" → "T1"
+                    task["depends_on"] = [
+                        f"T{d}" if d.isdigit() else d
+                        for d in dep_list
+                    ]
+                else:
+                    task[k.lower()] = v
+            
+            if task.get("title"):
+                tasks.append(task)
+        
+        if tasks:
+            return tasks
+    
+    # Fallback: try "## Task T1" with "- key: value" lines (original format)
     blocks = re.split(r"^## Task\s+", plan_md, flags=re.MULTILINE)
     for blk in blocks[1:]:
         lines = blk.strip().splitlines()
         if not lines:
             continue
-        task_id = lines[0].strip()
-        task: dict[str, Any] = {"id": task_id}
+        raw_id = lines[0].strip()
+        task_id = raw_id if raw_id.upper().startswith("T") else f"T{raw_id}"
+        task = {"id": task_id}
         for ln in lines[1:]:
             m = re.match(r"^-\s+(\w+):\s*(.*)$", ln)
             if m:
@@ -76,7 +142,8 @@ def _parse_plan(plan_md: str) -> list[dict[str, Any]]:
                     task[k] = v.lower() == "true"
                 else:
                     task[k] = v
-        tasks.append(task)
+        if task.get("title") or task.get("id"):
+            tasks.append(task)
     return tasks
 
 
@@ -229,6 +296,29 @@ class Orchestrator:
             rs.last_step_at = time.strftime("%Y-%m-%dT%H:%M:%S")
             try:
                 rs = self._execute_node(rs, node)
+            except AgentBlocked as e:
+                # Agent declined via <blocked> tag. Treat as task failure.
+                rs.status = "error"
+                rs.last_error = f"agent blocked: {e.reason}"
+                self.state.append_log(
+                    f"agent blocked at node={node.id}: {e.reason}"
+                )
+                # If this is a bugfixer block, the task is unrecoverable.
+                # The human should review the plan or rephrase the goal.
+                # Fire error notification so the user knows.
+                try:
+                    goal = self.state.get_goal() or ""
+                    import re
+                    m = re.search(r"^# Goal\n\n(.+?)(?:\n|$)", goal, re.DOTALL)
+                    goal_text = m.group(1).strip() if m else goal[:200]
+                    notify_run_error(
+                        goal_text,
+                        f"Agent blocked at {node.id}: {e.reason}. "
+                        f"Task may be too ambiguous — try rephrasing the goal."
+                    )
+                except Exception:
+                    pass
+                break
             except Exception as e:  # noqa: BLE001
                 rs.status = "error"
                 rs.last_error = f"{type(e).__name__}: {e}"
@@ -373,6 +463,46 @@ class Orchestrator:
             # Parse plan.md into tasks
             plan_md = self.state.read_md("plan") or ""
             rs.tasks = _parse_plan(plan_md)
+            
+            # Layer 2 fallback: if regex parser returned 0 tasks, try the
+            # normalizer (Groq + instructor) to reformat SOTA output
+            if not rs.tasks and plan_md.strip():
+                self.state.append_log("parser returned 0 tasks — trying normalizer")
+                try:
+                    from llm.normalizer import normalize_plan
+                    plan_obj = normalize_plan(plan_md)
+                    # Convert Plan pydantic object to list of dicts
+                    if hasattr(plan_obj, "tasks") and plan_obj.tasks:
+                        rs.tasks = []
+                        for t in plan_obj.tasks:
+                            task_dict = {
+                                "id": t.id,
+                                "title": t.title,
+                                "description": t.description,
+                                "needs_research": getattr(t, "needs_research", False),
+                                "files": getattr(t, "files", ""),
+                                "acceptance_criteria": getattr(t, "acceptance_criteria", ""),
+                            }
+                            if hasattr(t, "depends_on") and t.depends_on:
+                                task_dict["depends_on"] = t.depends_on
+                            rs.tasks.append(task_dict)
+                        self.state.append_log(
+                            f"normalizer recovered {len(rs.tasks)} tasks"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    self.state.append_log(f"normalizer failed: {e}")
+            
+            # Hard-cap tasks: SOTA models ignore prompt caps, so enforce here.
+            # Keep only the first N tasks (N = max_tasks_per_goal from DAG config).
+            max_tasks = getattr(self.dag, "max_tasks_per_goal", 3)
+            if len(rs.tasks) > max_tasks:
+                original_count = len(rs.tasks)
+                rs.tasks = rs.tasks[:max_tasks]
+                self.state.append_log(
+                    f"hard-capped {original_count} tasks to {max_tasks} "
+                    f"(SOTA model ignored prompt cap)"
+                )
+            
             self.state.append_log(f"thinker produced {len(rs.tasks)} tasks")
             rs.current_task_index = 0
             rs.current_node_id = node.next or "hitl_plan"

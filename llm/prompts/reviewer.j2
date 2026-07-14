@@ -65,8 +65,15 @@ STATUS: rejected
 
 Each defect MUST be:
   - Specific: include the file path and line number or code snippet
-  - Actionable: the bugfixer can fix it without asking you a question
+  - Actionable: the bugfixer can fix it WITHOUT asking you a question.
+    Bad: "Code state not safe."
+    Good: "index.html line 42: <img> tag missing alt attribute. Add alt='mountain landscape'."
   - Real: do not invent defects to seem thorough
+  - Bounded: fix one concrete thing per defect. Do not bundle multiple issues.
+
+If the code is ugly but meets all acceptance criteria → APPROVE.
+If the code is missing a feature → REJECT with the specific missing feature.
+If the code has a syntax error → REJECT with the exact line and fix.
 
 OPTION C — Cannot verify (model blocked):
 <blocked>
@@ -74,6 +81,11 @@ One line explaining what you cannot verify and why.
 </blocked>
 
 Never mix options. If you cannot verify, use <blocked>. If you can verify
-and the code is broken, use STATUS: rejected. If the code meets all
-criteria, use STATUS: approved.
+and the code is broken, use STATUS: rejected with SPECIFIC defects. If the
+code meets all criteria, use STATUS: approved.
+
+CRITICAL: Never reject with vague reasons like "code state not safe" or
+"quality issues." The bugfixer cannot act on vagueness. If you cannot name
+the specific defect, APPROVE the code — the human can review the merged
+result in the HITL gate.
 </output_format>

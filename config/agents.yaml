@@ -1,35 +1,27 @@
-# myforge agent definitions — Batch 3 Configuration
+# myforge agent definitions — Batch 3 (CORRECTED MODEL SLUGS)
 #
-# MODEL STRATEGY:
-#   SOTA via web bridge (WebAI2API localhost:3006):
-#     - ChatGPT (openai/*)     → coder (best code gen)
-#     - DeepSeek (deepseek/*)  → reviewer (strong analysis)
-#     - Gemini (google/*)      → researcher (search grounding, 1M context)
+# Model slugs verified against WebAI2API dashboard (localhost:3006):
+#   DeepSeek:  deepseek, deepseek-thinking, deepseek-search,
+#              deepseek-thinking-search, deepseek-expert, etc.
+#              (also deepseek_text/* variants — same models, text-only mode)
+#   Gemini:    gemini-3.1-flash, gemini-3.1-flash-thinking, gemini-3.1-pro
+#              (also gemini_text/* variants)
+#   ChatGPT:   gpt-instant, gpt-thinking
 #
-#   Free-tier cloud APIs (native function calling, fast, reliable):
-#     - Groq Llama 3.3 70B     → fallback for all agents (instant, tool-capable)
-#     - Gemini Flash API      → fallback (free tier, fast)
-#     - OpenRouter Owl-Alpha  → fallback (long context)
-#     - Cohere North-Code     → coder fallback (code-focused)
-#
-# TOOL MODE:
-#   All agents start in SINGLE-PASS mode (use_tools: false).
-#   Tool-loop mode is wired but disabled — enable per-agent after testing.
-#   When enabled, cloud API endpoints use native function calling;
-#   web bridge endpoints use ReAct text-based tool calling.
-#
-# CHAT CONTINUITY NOTE:
-#   Web bridge tool loops require WebAI2API to maintain chat sessions.
-#   This is UNTESTED. For Batch 3, tool-loop mode is disabled for web
-#   bridge agents. Enable only after verifying chat continuity.
+# STRATEGY:
+#   Thinker:   deepseek-thinking (reasoning mode) → Groq → Gemini Flash
+#   Coder:     gpt-thinking (GPT-4o class, strong code gen) → deepseek → Groq
+#   Reviewer:  deepseek (fast analysis) → Groq
+#   Bugfixer:  gpt-instant (targeted edits) → deepseek → Groq
+#   Researcher: deepseek-search (web search mode) → gemini-3.1-flash → Groq
 
 agents:
   thinker:
     role: "Decompose the goal into a DAG of concrete tasks."
     model:
-      # Primary: DeepSeek R1 via web bridge — strong reasoning
+      # Primary: DeepSeek with thinking mode — strong reasoning for planning
       primary:
-        model: "deepseek/deepseek-reasoner"
+        model: "deepseek/deepseek-thinking"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
@@ -43,19 +35,20 @@ agents:
     allow_mock: true
     use_tools: false
     allowed_tools: []
+    min_response_length: 100  # plans should be at least 100 chars
 
   coder:
     role: "Implement a single task. Output ONLY code blocks."
     model:
-      # Primary: ChatGPT via web bridge — best code generation
+      # Primary: ChatGPT with thinking — best code generation
       primary:
-        model: "openai/gpt-pro"
+        model: "openai/gpt-thinking"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: DeepSeek chat via web bridge — code-focused
+      # Fallback 1: DeepSeek (standard mode) — code-focused
       fallback:
-        model: "deepseek/deepseek-chat"
+        model: "deepseek/deepseek"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
@@ -65,8 +58,8 @@ agents:
     temperature: 0.1
     max_tokens: 4096
     allow_mock: true
-    # Tool mode: DISABLED for Batch 3 (enable after testing chat continuity)
     use_tools: false
+    min_response_length: 200  # code output should be at least 200 chars
     allowed_tools:
       - read_file
       - write_file
@@ -83,19 +76,18 @@ agents:
   reviewer:
     role: "Approve or reject coder output. List concrete defects only."
     model:
-      # Primary: DeepSeek via web bridge — strong code analysis
+      # Primary: DeepSeek (standard mode) — strong code analysis, fast
       primary:
-        model: "deepseek/deepseek-chat"
+        model: "deepseek/deepseek"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: Groq Llama 3.3 — instant, supports native tool calling
+      # Fallback 1: Groq Llama 3.3 — instant
       fallback: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/reviewer.j2"
     temperature: 0.0
     max_tokens: 1024
     allow_mock: true
-    # Tool mode: DISABLED for Batch 3 (enable after testing)
     use_tools: false
     allowed_tools:
       - read_file
@@ -108,15 +100,15 @@ agents:
   bugfixer:
     role: "Apply reviewer's defect list to the coder's prior output."
     model:
-      # Primary: ChatGPT via web bridge — best at targeted edits
+      # Primary: ChatGPT instant — best at targeted edits
       primary:
-        model: "openai/gpt-pro"
+        model: "openai/gpt-instant"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: DeepSeek chat via web bridge
+      # Fallback 1: DeepSeek (standard mode)
       fallback:
-        model: "deepseek/deepseek-chat"
+        model: "deepseek/deepseek"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
@@ -139,15 +131,15 @@ agents:
   researcher:
     role: "Web-ground a task flagged needs_research=true."
     model:
-      # Primary: Gemini via web bridge — search grounding, 1M context
+      # Primary: DeepSeek with search mode — web search + synthesis
       primary:
-        model: "google/gemini-pro"
+        model: "deepseek/deepseek-search"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: ChatGPT via web bridge — strong synthesis
+      # Fallback 1: Gemini 3.1 Flash via web bridge — search grounding
       fallback:
-        model: "openai/gpt-pro"
+        model: "google/gemini-3.1-flash"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
@@ -161,13 +153,12 @@ agents:
     use_tools: false
     allowed_tools: []
 
-# The orchestrator is NOT here — it's a Python DAG executor, not an agent.
-#
 # NOTES:
-#   - All agents start in single-pass mode (use_tools: false)
-#   - To enable tool loop for an agent: set use_tools: true
-#   - Cloud API endpoints (Groq, Gemini) support native function calling
-#   - Web bridge endpoints use ReAct text-based tool calling (EXPERIMENTAL)
-#   - Verify WebAI2API chat continuity before enabling web bridge tool loops
-#   - DeepSeek reviewer may emit <think> tags — normalizer should strip these
-#   - ChatGPT rate limits: fallback chain handles implicitly (no tracking needed)
+#   - Model slugs verified against WebAI2API /v1/models endpoint
+#   - deepseek-thinking = reasoning mode (slower, better for planning)
+#   - deepseek-search = web search mode (for researcher)
+#   - gpt-thinking = GPT-4o with reasoning (best for coder)
+#   - gpt-instant = GPT-4o fast mode (good for bugfixer)
+#   - All agents have Groq as ultimate fallback (native function calling)
+#   - To verify available models: curl -H "Authorization: Bearer <key>" \
+#       http://localhost:3006/v1/models

@@ -111,6 +111,25 @@ class CoderAgent(ToolAgent):
         if blocked:
             raise AgentBlocked(blocked)
 
+        # 0. Validate output quality BEFORE parsing
+        # SOTA models via web bridge sometimes produce garbled/truncated output
+        # Detect this early and fail fast with a clear error
+        if len(model_output.strip()) < 20:
+            raise ValueError(
+                f"coder output too short ({len(model_output)} chars) — "
+                f"likely truncated or garbled. Output: {model_output!r}"
+            )
+
+        # 0b. Detect garbled output: CSS inside HTML files, wrong language, etc.
+        # SOTA models sometimes mix CSS into HTML or use wrong language identifier
+        if "<html" in model_output and ("{" in model_output.split("<html")[0][:200]
+                                        or ".hero" in model_output[:500]
+                                        or "padding:" in model_output[:500]):
+            raise ValueError(
+                f"coder produced garbled output — CSS code mixed into HTML. "
+                f"This is a known SOTA web bridge issue. First 300 chars: {model_output[:300]!r}"
+            )
+
         # 1. Always write the audit record to state/changes/{task_id}.md
         path = self.state.write_md(ctx.task_id, model_output, subdir="changes")
         # 2. Parse fenced blocks with path= headers and write real files
@@ -125,6 +144,15 @@ class CoderAgent(ToolAgent):
                     raise ValueError(
                         f"coder output did not contain any writable code blocks. "
                         f"First 200 chars: {model_output[:200]!r}"
+                    )
+
+            # Validate each block has reasonable content
+            for blk in blocks:
+                if len(blk.content.strip()) < 5:
+                    raise ValueError(
+                        f"coder produced empty/truncated file: {blk.path} "
+                        f"(only {len(blk.content)} chars). This is likely a "
+                        f"garbled SOTA response."
                     )
             existing = ctx.worktree.list_files()
             single_source = _single_existing_source(existing)

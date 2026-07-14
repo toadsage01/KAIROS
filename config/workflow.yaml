@@ -40,10 +40,12 @@ dag:
     type: terminal
 
 # Safety: never let coder <-> reviewer loop forever
-max_review_iterations: 2
+max_review_iterations: 3
 
-# Safety: keep simple goals from turning into analysis/test task explosions.
-max_tasks_per_goal: 2
+# Hard cap on tasks per goal (enforced in orchestrator, not just prompt)
+# SOTA models via web bridge ignore prompt instructions — this is the
+# safety net. Set to 3 for most use cases. Increase only for complex goals.
+max_tasks_per_goal: 3
 
 # Researcher is conditional — invoked only when thinker flags a task
 # with needs_research: true. The orchestrator inserts it before coder

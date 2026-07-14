@@ -48,11 +48,26 @@ if _HAS_PYDANTIC:
         needs_research: bool = False
         files: str = ""
         acceptance_criteria: str = ""
+        # Common fields that SOTA models may include + code may access
+        depends_on: list[str] = []  # task IDs this task depends on
+        priority: str = "normal"  # low | normal | high
+        estimated_time: str = ""  # human-readable time estimate
+        tags: list[str] = []
+        status: str = "pending"  # pending | in_progress | done | blocked
+
+        class Config:
+            # Allow extra fields — if the SOTA model adds fields we didn't
+            # anticipate, they're preserved instead of causing errors.
+            # This is the forward-compatibility safety net.
+            extra = "allow"
 
     class Plan(BaseModel):
         tasks: list[TaskItem]
         is_blocked: bool = False
         blocked_reason: str = ""
+
+        class Config:
+            extra = "allow"
 
     class CodeBlock(BaseModel):
         path: str
@@ -60,10 +75,16 @@ if _HAS_PYDANTIC:
         language: str = "python"
         action: str = "modify"  # create | modify | delete
 
+        class Config:
+            extra = "allow"
+
     class CoderOutput(BaseModel):
         blocks: list[CodeBlock]
         is_blocked: bool = False
         blocked_reason: str = ""
+
+        class Config:
+            extra = "allow"
 
 else:
     # Fallbacks if pydantic not available

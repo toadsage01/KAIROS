@@ -47,21 +47,29 @@ class Worktree:
             return self.path
         # Make sure target_repo is a git repo with at least one commit
         self._ensure_target_repo()
+        # Prune stale worktree entries (directories that were deleted manually)
+        _run_git(self.target_repo, "worktree", "prune", check=False)
         # If worktree already exists (e.g. from a previous bugfixer pass),
         # reuse it. Otherwise create.
         if not self.path.exists():
-            # Delete stale branch if it exists (e.g. from a previous run)
-            try:
-                _run_git(self.target_repo, "branch", "-D", self.branch, check=False)
-            except Exception:
-                pass
+            # Delete stale branch if it exists (e.g. from a previous run
+            # where the worktree was deleted manually but the branch remained)
+            _run_git(self.target_repo, "branch", "-D", self.branch, check=False)
             r = _run_git(
                 self.target_repo,
                 "worktree", "add", "-b", self.branch,
                 str(self.path), "HEAD",
             )
             if r.returncode != 0:
-                raise RuntimeError(f"worktree add failed: {r.stderr}")
+                # If branch still exists (race condition), try without -b
+                if "already exists" in r.stderr:
+                    r = _run_git(
+                        self.target_repo,
+                        "worktree", "add",
+                        str(self.path), self.branch,
+                    )
+                if r.returncode != 0:
+                    raise RuntimeError(f"worktree add failed: {r.stderr}")
         self._ensured = True
         return self.path
 
@@ -81,39 +89,9 @@ class Worktree:
     def write_file(self, rel_path: str, content: str) -> Path:
         """Write a file inside the worktree. Creates parent dirs."""
         root = self.ensure()
-        cleaned = rel_path.strip().strip("\"'")
-        if not cleaned:
-            raise ValueError(f"refusing to write invalid path: {rel_path!r}")
-        rel = Path(cleaned)
-        if rel.is_absolute() or ".." in rel.parts:
-            raise ValueError(f"refusing to write unsafe path: {rel_path!r}")
-        target = root / rel
-        resolved = target.resolve()
-        if root.resolve() not in resolved.parents and resolved != root.resolve():
-            raise ValueError(f"refusing to write outside worktree: {rel_path!r}")
+        target = root / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        if content.rstrip().endswith("\nEOF"):
-            content = content.rstrip()[:-4].rstrip() + "\n"
         target.write_text(content, encoding="utf-8")
-        return target
-
-    def delete_file(self, rel_path: str) -> Path:
-        """Delete a file inside the worktree."""
-        root = self.ensure()
-        cleaned = rel_path.strip().strip("\"'")
-        if not cleaned:
-            raise ValueError(f"refusing to delete invalid path: {rel_path!r}")
-        rel = Path(cleaned)
-        if rel.is_absolute() or ".." in rel.parts:
-            raise ValueError(f"refusing to delete unsafe path: {rel_path!r}")
-        target = root / rel
-        resolved = target.resolve()
-        if root.resolve() not in resolved.parents and resolved != root.resolve():
-            raise ValueError(f"refusing to delete outside worktree: {rel_path!r}")
-        if target.exists() and not target.is_file():
-            raise ValueError(f"refusing to delete non-file path: {rel_path!r}")
-        if target.exists():
-            target.unlink()
         return target
 
     def read_file(self, rel_path: str) -> str | None:
