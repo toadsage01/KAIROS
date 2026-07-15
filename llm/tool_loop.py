@@ -117,6 +117,8 @@ def react_loop(
     allowed_tools: list[str],
     template_vars: dict[str, Any] | None = None,
     extra_context: str = "",
+    conversation_id: str | None = None,
+    json_mode: bool = False,
 ) -> str:
     """Run a ReAct tool loop with a web bridge model.
 
@@ -129,6 +131,8 @@ def react_loop(
         allowed_tools: List of tool names this agent can use
         template_vars: Variables for Jinja2 system prompt rendering
         extra_context: Extra context to append to system prompt
+        conversation_id: If set, passed to WebAI2API for session continuity
+        json_mode: If True, injects strict JSON output directive
 
     Returns:
         The final model output (code blocks, STATUS:, etc.) with tool
@@ -164,6 +168,7 @@ def react_loop(
         try:
             result = _react_loop_with_endpoint(
                 agent_name, endpoint, messages, cfg, tool_registry, tool_ctx,
+                conversation_id, json_mode,
             )
             return result
         except Exception as e:  # noqa: BLE001
@@ -196,6 +201,8 @@ def _react_loop_with_endpoint(
     cfg: AgentConfig,
     tool_registry: Any,
     tool_ctx: ToolContext,
+    conversation_id: str | None = None,
+    json_mode: bool = False,
 ) -> str:
     """Run the ReAct loop with a single endpoint."""
     import litellm
@@ -213,6 +220,15 @@ def _react_loop_with_endpoint(
         kwargs["api_base"] = endpoint.api_base
     if endpoint.api_key:
         kwargs["api_key"] = endpoint.api_key
+        
+    # WebAI2API integration: pass conversationId and json_mode via extra_body
+    if endpoint.api_base and (conversation_id or json_mode):
+        extra_body = {}
+        if conversation_id:
+            extra_body["conversationId"] = conversation_id
+        if json_mode:
+            extra_body["json_mode"] = True
+        kwargs["extra_body"] = extra_body
 
     iteration = 0
     all_tool_results: list[str] = []

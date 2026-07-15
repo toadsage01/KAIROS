@@ -54,6 +54,8 @@ def route_with_tools(
     agents: dict[str, AgentConfig] | None = None,
     extra_context: str = "",
     template_vars: dict[str, Any] | None = None,
+    conversation_id: str | None = None,
+    json_mode: bool = False,
 ) -> str:
     """Run an agent with tool support.
 
@@ -72,6 +74,8 @@ def route_with_tools(
         agents: Agent configs (loaded from agents.yaml if None)
         extra_context: Extra context for system prompt
         template_vars: Jinja2 variables for system prompt rendering
+        conversation_id: If set, passed to WebAI2API for session continuity
+        json_mode: If True, injects strict JSON output directive
 
     Returns:
         The final model output (text — code blocks, STATUS:, etc.)
@@ -107,6 +111,8 @@ def route_with_tools(
                     allowed_tools=allowed_tools,
                     template_vars=template_vars,
                     extra_context=extra_context,
+                    conversation_id=conversation_id,
+                    json_mode=json_mode,
                 )
             else:
                 # Cloud API → native function calling

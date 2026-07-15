@@ -74,6 +74,10 @@ class ToolAgent(BaseAgent):
             hitl_callback=None,  # v1: no HITL for tools (worktree isolation)
         )
 
+        # Generate conversation_id for session continuity
+        # Uses task_id + agent_name so each agent task gets a unique session
+        conv_id = f"kairos-{ctx.task_id}-{self.name}"
+
         # Run with tools
         out = route_with_tools(
             agent_name=self.name,
@@ -84,6 +88,8 @@ class ToolAgent(BaseAgent):
             agents=self.agents_cfg,
             extra_context=self.extra_context(ctx),
             template_vars=self.template_vars(ctx),
+            conversation_id=conv_id,
+            json_mode=False,  # set to True if agent needs strict JSON output
         )
 
         # Write output (same as single-pass)

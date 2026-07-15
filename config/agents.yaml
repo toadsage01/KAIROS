@@ -1,65 +1,61 @@
-# myforge agent definitions — Batch 3 (CORRECTED MODEL SLUGS)
+# myforge agent definitions — SOTA Tool-Loop Edition
 #
-# Model slugs verified against WebAI2API dashboard (localhost:3006):
-#   DeepSeek:  deepseek, deepseek-thinking, deepseek-search,
-#              deepseek-thinking-search, deepseek-expert, etc.
-#              (also deepseek_text/* variants — same models, text-only mode)
-#   Gemini:    gemini-3.1-flash, gemini-3.1-flash-thinking, gemini-3.1-pro
-#              (also gemini_text/* variants)
-#   ChatGPT:   gpt-instant, gpt-thinking
+# CRITICAL: All web bridge models MUST use "openai/" prefix (NOT "anthropic/", 
+# "google/", or "deepseek/"). LiteLLM uses provider-specific auth headers
+# for recognized prefixes (e.g. anthropic/ → x-api-key header). WebAI2API
+# expects standard "Authorization: Bearer" format. Using "openai/" prefix
+# forces LiteLLM to use the correct auth format.
 #
-# STRATEGY:
-#   Thinker:   deepseek-thinking (reasoning mode) → Groq → Gemini Flash
-#   Coder:     gpt-thinking (GPT-4o class, strong code gen) → deepseek → Groq
-#   Reviewer:  deepseek (fast analysis) → Groq
-#   Bugfixer:  gpt-instant (targeted edits) → deepseek → Groq
-#   Researcher: deepseek-search (web search mode) → gemini-3.1-flash → Groq
+# WebAI2API model names (NO provider prefix):
+#   claude-sonnet-5, claude-opus-5, claude-haiku-5, claude-auto
+#   gpt-thinking, gpt-instant, gpt-pro
+#   deepseek, deepseek-thinking, deepseek-search, deepseek-thinking-search
+#   gemini-3.1-flash, gemini-3.1-flash-thinking, gemini-3.1-pro
+#   glm-5.2, glm-5.1, glm-5, glm-4.6, glm-4.5
 
 agents:
   thinker:
     role: "Decompose the goal into a DAG of concrete tasks."
     model:
-      # Primary: DeepSeek with thinking mode — strong reasoning for planning
       primary:
-        model: "deepseek/deepseek-thinking"
+        model: "openai/claude-sonnet-5"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: Groq Llama 3.3 — instant, reliable
-      fallback: "groq/llama-3.3-70b-versatile"
-      # Fallback 2: Gemini Flash API — free tier
-      fallback_2: "gemini/gemini-2.0-flash"
+      fallback:
+        model: "openai/deepseek-thinking"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 200
+      fallback_2: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/thinker.j2"
     temperature: 0.2
     max_tokens: 2048
     allow_mock: true
     use_tools: false
     allowed_tools: []
-    min_response_length: 100  # plans should be at least 100 chars
+    min_response_length: 100
 
   coder:
     role: "Implement a single task. Output ONLY code blocks."
     model:
-      # Primary: ChatGPT with thinking — best code generation
       primary:
         model: "openai/gpt-thinking"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: DeepSeek (standard mode) — code-focused
       fallback:
-        model: "deepseek/deepseek"
+        model: "openai/claude-sonnet-5"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 2: Groq Llama 3.3 — instant, supports native tool calling
       fallback_2: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/coder.j2"
     temperature: 0.1
     max_tokens: 4096
     allow_mock: true
     use_tools: false
-    min_response_length: 200  # code output should be at least 200 chars
+    min_response_length: 200
     allowed_tools:
       - read_file
       - write_file
@@ -76,19 +72,23 @@ agents:
   reviewer:
     role: "Approve or reject coder output. List concrete defects only."
     model:
-      # Primary: DeepSeek (standard mode) — strong code analysis, fast
       primary:
-        model: "deepseek/deepseek"
+        model: "openai/claude-sonnet-5"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: Groq Llama 3.3 — instant
-      fallback: "groq/llama-3.3-70b-versatile"
+      fallback:
+        model: "openai/deepseek"
+        api_base: "http://localhost:3006/v1"
+        api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
+        request_timeout: 200
+      fallback_2: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/reviewer.j2"
     temperature: 0.0
     max_tokens: 1024
     allow_mock: true
     use_tools: false
+    min_response_length: 50
     allowed_tools:
       - read_file
       - list_dir
@@ -100,25 +100,23 @@ agents:
   bugfixer:
     role: "Apply reviewer's defect list to the coder's prior output."
     model:
-      # Primary: ChatGPT instant — best at targeted edits
       primary:
-        model: "openai/gpt-instant"
+        model: "openai/gpt-thinking"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: DeepSeek (standard mode)
       fallback:
-        model: "deepseek/deepseek"
+        model: "openai/claude-sonnet-5"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 2: Groq Llama 3.3
       fallback_2: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/bugfixer.j2"
     temperature: 0.1
     max_tokens: 4096
     allow_mock: true
     use_tools: false
+    min_response_length: 200
     allowed_tools:
       - read_file
       - write_file
@@ -131,19 +129,16 @@ agents:
   researcher:
     role: "Web-ground a task flagged needs_research=true."
     model:
-      # Primary: DeepSeek with search mode — web search + synthesis
       primary:
-        model: "deepseek/deepseek-search"
+        model: "openai/gemini-3.1-pro"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 1: Gemini 3.1 Flash via web bridge — search grounding
       fallback:
-        model: "google/gemini-3.1-flash"
+        model: "openai/deepseek-search"
         api_base: "http://localhost:3006/v1"
         api_key: "sk-if-you-love-life-dont-waste-time-for-time-is-what-life-is-made-up-of"
         request_timeout: 200
-      # Fallback 2: Groq Llama 3.3
       fallback_2: "groq/llama-3.3-70b-versatile"
     system_prompt_file: "llm/prompts/researcher.j2"
     temperature: 0.3
@@ -152,13 +147,11 @@ agents:
     needs_tools: ["web"]
     use_tools: false
     allowed_tools: []
+    min_response_length: 100
 
 # NOTES:
-#   - Model slugs verified against WebAI2API /v1/models endpoint
-#   - deepseek-thinking = reasoning mode (slower, better for planning)
-#   - deepseek-search = web search mode (for researcher)
-#   - gpt-thinking = GPT-4o with reasoning (best for coder)
-#   - gpt-instant = GPT-4o fast mode (good for bugfixer)
-#   - All agents have Groq as ultimate fallback (native function calling)
-#   - To verify available models: curl -H "Authorization: Bearer <key>" \
-#       http://localhost:3006/v1/models
+#   - ALL web bridge models use "openai/" prefix (NOT anthropic/, google/, etc.)
+#   - This forces LiteLLM to use "Authorization: Bearer" header format
+#   - WebAI2API strips the "openai/" prefix and routes by model name
+#   - Groq uses "groq/" prefix (direct API, correct auth format)
+#   - litellm.drop_params = True in router.py drops unsupported params

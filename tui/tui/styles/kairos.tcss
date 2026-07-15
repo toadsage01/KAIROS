@@ -1,0 +1,157 @@
+/*
+ * Kairos TUI — Textual CSS
+ *
+ * Defines the visual style for all widgets.
+ * Colors are inspired by model brand colors.
+ */
+
+Screen {
+    layout: vertical;
+}
+
+/* Header — model indicator + task status */
+#header {
+    dock: top;
+    height: 3;
+    background: $surface;
+    border-bottom: solid $primary;
+    padding: 0 1;
+    layout: horizontal;
+}
+
+#model-indicator {
+    width: auto;
+    padding: 0 2;
+    content-align: center middle;
+}
+
+#task-status {
+    width: 1fr;
+    padding: 0 2;
+    content-align: center middle;
+}
+
+#header-spacer {
+    width: auto;
+    padding: 0 2;
+}
+
+/* Main content — three panels */
+#main-content {
+    height: 1fr;
+    layout: horizontal;
+}
+
+/* Left panel — Agent Flow */
+#agent-flow-panel {
+    width: 1fr;
+    border: solid $surface;
+    padding: 0 1;
+}
+
+#agent-flow-panel > .panel-title {
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+    text-style: bold;
+}
+
+/* Right panel — Code Diff */
+#code-diff-panel {
+    width: 2fr;
+    border: solid $surface;
+    padding: 0 1;
+}
+
+#code-diff-panel > .panel-title {
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+    text-style: bold;
+}
+
+/* Bottom panel — Conversation Log */
+#conversation-panel {
+    dock: bottom;
+    height: 40%;
+    border: solid $surface;
+    border-bottom: none;
+    padding: 0 1;
+}
+
+#conversation-panel > .panel-title {
+    background: $surface;
+    color: $text;
+    padding: 0 1;
+    text-style: bold;
+}
+
+/* Input bar — command input */
+#input-bar {
+    dock: bottom;
+    height: 3;
+    background: $surface;
+    border-top: solid $primary;
+    padding: 0 1;
+    layout: horizontal;
+}
+
+#input-prompt {
+    width: auto;
+    color: $accent;
+    content-align: center middle;
+}
+
+#command-input {
+    width: 1fr;
+    border: none;
+    background: $boost;
+}
+
+/* Status bar — keyboard shortcuts hint */
+#status-bar {
+    dock: bottom;
+    height: 1;
+    background: $surface;
+    color: $text-disabled;
+    padding: 0 1;
+}
+
+/* Agent flow entries */
+.agent-entry {
+    padding: 0 1;
+    height: auto;
+}
+
+.agent-entry .agent-name {
+    text-style: bold;
+}
+
+.agent-entry .agent-status {
+    width: 3;
+    content-align: center middle;
+}
+
+/* Log entries in conversation */
+.log-entry {
+    height: auto;
+    padding: 0 1;
+}
+
+/* Diff lines */
+.diff-line-added {
+    color: green;
+}
+
+.diff-line-removed {
+    color: red;
+}
+
+.diff-line-context {
+    color: $text-disabled;
+}
+
+/* Scrollbar */
+Scrollbar {
+    background: $surface;
+}

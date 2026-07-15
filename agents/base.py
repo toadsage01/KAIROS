@@ -111,12 +111,16 @@ class BaseAgent(ABC):
         a tool loop. Base implementation is single-pass.
         """
         prompt = self.build_prompt(ctx)
+        # Generate a conversation_id for session continuity
+        # Uses task_id + agent_name so each agent task gets a unique session
+        conv_id = f"kairos-{ctx.task_id}-{self.name}"
         out = route(
             agent_name=self.name,
             prompt=prompt,
             agents=self.agents_cfg,
             extra_context=self.extra_context(ctx),
             template_vars=self.template_vars(ctx),
+            conversation_id=conv_id,
         )
         path = self.write_output(ctx, out)
         self.state.append_log(

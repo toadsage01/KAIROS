@@ -42,6 +42,11 @@ load_dotenv()
 try:
     import litellm  # type: ignore
     _HAS_LITELLM = True
+    # Drop unsupported params (temperature, top_p, etc.) for web bridge models.
+    # LiteLLM validates params based on model name (e.g. "claude-sonnet-5" →
+    # Anthropic API rules: only temperature=1 allowed). But we're hitting
+    # WebAI2API, not the real API — the web UI ignores these params anyway.
+    litellm.drop_params = True
 except ImportError:
     litellm = None  # type: ignore
     _HAS_LITELLM = False
@@ -232,19 +237,26 @@ def _validate_response(text: str, endpoint: ModelEndpoint) -> str:
     """Catch HTML/garbage responses from web bridges before they pollute state."""
     if not text or not text.strip():
         raise RuntimeError(f"empty response from {endpoint.display_name}")
-    lower = text.lower()[:500]
-    if "<html" in lower or "<!doctype" in lower:
-        raise RuntimeError(
-            f"HTML response from {endpoint.display_name} — likely Cloudflare "
-            f"block or session expiry. First 200 chars: {text[:200]!r}"
-        )
+    # Only flag as HTML/Cloudflare if there are NO code fences.
+    # If the response contains ``` fences, it's legitimate code output
+    # (e.g. ```html path=index.html containing <!DOCTYPE html>).
+    # Cloudflare blocks return raw HTML with no fences.
+    if "```" not in text:
+        lower = text.lower()[:500]
+        if "<html" in lower or "<!doctype" in lower:
+            raise RuntimeError(
+                f"HTML response from {endpoint.display_name} — likely Cloudflare "
+                f"block or session expiry. First 200 chars: {text[:200]!r}"
+            )
     if len(text) > 100_000:
         raise RuntimeError(f"oversized response from {endpoint.display_name}")
     return text
 
 
 def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
-                  temperature: float, max_tokens: int) -> str:
+                  temperature: float, max_tokens: int,
+                  conversation_id: str | None = None,
+                  json_mode: bool = False) -> str:
     """Single LiteLLM call. Raises on failure.
 
     Passes api_base and api_key when set (web bridge mode). Cloud APIs
@@ -263,14 +275,31 @@ def _call_litellm(endpoint: ModelEndpoint, system: str, prompt: str,
         "max_tokens": max_tokens,
         "num_retries": endpoint.num_retries,
         "request_timeout": endpoint.request_timeout,
+        "stream": True,  # CRITICAL: WebAI2API rejects non-streaming when busy
     }
     # Web bridge: pass api_base + api_key so LiteLLM hits our local proxy
     if endpoint.api_base:
         kwargs["api_base"] = endpoint.api_base
     if endpoint.api_key:
         kwargs["api_key"] = endpoint.api_key
-    resp = litellm.completion(**kwargs)
-    return resp.choices[0].message.content  # type: ignore
+        
+    # WebAI2API integration: pass conversationId and json_mode via extra_body
+    # This enables session continuity and strict JSON output for SOTA models
+    if endpoint.api_base and (conversation_id or json_mode):
+        extra_body = {}
+        if conversation_id:
+            extra_body["conversationId"] = conversation_id
+        if json_mode:
+            extra_body["json_mode"] = True
+        kwargs["extra_body"] = extra_body
+
+    # When streaming, we must concatenate the chunks
+    response = litellm.completion(**kwargs)
+    full_text = ""
+    for chunk in response:
+        delta = chunk.choices[0].delta.content or ""
+        full_text += delta
+    return _validate_response(full_text, endpoint)
 
 
 def _log_fallback(agent: str, endpoint: ModelEndpoint, err: Exception,
@@ -350,7 +379,9 @@ def _log_prompt_response(agent: str, endpoint: ModelEndpoint,
 def route(agent_name: str, prompt: str,
           agents: dict[str, AgentConfig] | None = None,
           extra_context: str = "",
-          template_vars: dict[str, Any] | None = None) -> str:
+          template_vars: dict[str, Any] | None = None,
+          conversation_id: str | None = None,
+          json_mode: bool = False) -> str:
     """Run one agent. Returns the model's text output.
 
     Tries primary -> fallback -> fallback_2 -> mock (if allowed).
@@ -359,6 +390,10 @@ def route(agent_name: str, prompt: str,
 
     Each endpoint may be a cloud API (model only) or a web bridge
     (model + api_base + api_key). The chain can mix both freely.
+
+    Args:
+        conversation_id: If set, passed to WebAI2API for session continuity.
+        json_mode: If True, injects strict JSON output directive.
     """
     if agents is None:
         agents = load_agents()
@@ -389,6 +424,8 @@ def route(agent_name: str, prompt: str,
                 prompt=prompt,
                 temperature=cfg.temperature,
                 max_tokens=cfg.max_tokens,
+                conversation_id=conversation_id,
+                json_mode=json_mode,
             )
             # Response quality validation: check minimum length
             # If the response is too short, it's likely garbled/truncated
