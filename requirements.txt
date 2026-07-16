@@ -15,20 +15,18 @@ watchdog==6.0.0
 textual==0.85.2
 rich==13.9.4
 
-# Phase 3-5 — optional but recommended. Without these the system still
-# runs but degrades: no vector retrieval, no cron, no MCP, no web extract.
+# Phase 2: Smart Memory — tree-sitter AST parsing + dependency graph
+tree-sitter==0.26.0
+tree-sitter-python==0.23.2
+networkx==3.4.2
+
+# Phase 3-5 — optional but recommended.
 chromadb==0.5.23
 apscheduler==3.11.0
 trafilatura==2.0.0
 
-# Mobile HITL — Telegram bot. Without it, notifications are no-ops
-# (myforge works fine, just no phone notifications).
+# Mobile HITL — Telegram bot.
 python-telegram-bot==21.10
-
-# Uncomment if you want tree-sitter-based symbol parsing (richer codemap).
-# Without it, codemap falls back to regex scanning (works for Python/JS/TS/Go/Rust).
-# tree-sitter==0.23.2
-# tree-sitter-languages==1.2.1
 
 # Uncomment if you want MCP tool support (Phase 4).
 # mcp==1.2.0

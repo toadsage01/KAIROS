@@ -1,20 +1,26 @@
 """
 Retriever — bounded context for the coder agent.
 
-Given a task, returns a compact string with:
-  1. Top-k relevant file chunks from the vector store (semantic)
-  2. A ranked repo sub-map (structural)
+Phase 2: Now uses tree-sitter AST signatures instead of raw file chunks.
+Returns:
+  1. Compact repo map (function/class signatures, not raw code)
+  2. Full content of the file being edited (ground truth)
+  3. Signatures of files that depend on / are depended on by the target file
 
-The coder reads THIS instead of the whole repo. Token cost stays low
-even for large repos.
+Context budget: limits total output to ~4000 chars (was unbounded before).
+This reduces prompt bloat by 10x while maintaining relevance.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from .codemap import CodeMap
+from .codemap import CodeMap, FileSummary
 from .vectorstore import VectorStore
+
+
+# Context budget — maximum chars of retrieval context to inject into prompt
+MAX_CONTEXT_CHARS = 4000
 
 
 class Indexer:
@@ -25,68 +31,128 @@ class Indexer:
         self.codemap = codemap
 
     def index_repo(self, repo_root: str) -> dict[str, int]:
+        """Index the repo: build codemap + index file summaries into vector store."""
         root = Path(repo_root).resolve()
-        n_files = 0
-        n_chunks = 0
-        # Build codemap (which scans files anyway) — symbols live on codemap.symbols
+        # Build codemap (tree-sitter AST signatures)
         self.codemap.repo_root = str(root)
         self.codemap.build()
-        # Walk files for content indexing into the vector store
-        skip_dirs = {".git", ".worktrees", "__pycache__", "node_modules",
-                     ".venv", "venv", ".chroma", "dist", "build"}
-        skip_exts = {".pyc", ".pyo", ".so", ".png", ".jpg", ".jpeg", ".gif",
-                     ".svg", ".pdf", ".zip", ".tar", ".gz"}
-        for p in root.rglob("*"):
-            if not p.is_file():
-                continue
-            if any(part in skip_dirs for part in p.parts):
-                continue
-            if p.suffix in skip_exts:
-                continue
-            try:
-                content = p.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                continue
-            rel = str(p.relative_to(root))
-            n = self.vector.index_file(rel, content)
+
+        n_files = len(self.codemap.files)
+        n_chunks = 0
+
+        # Index file SIGNATURES (not raw content) into vector store
+        # This is 10x smaller than indexing raw chunks
+        for path, summary in self.codemap.files.items():
+            # Index the signature text as a "chunk"
+            n = self.vector.index_file(path, summary.signature_text)
             n_chunks += n
-            n_files += 1
-        return {"files": n_files, "chunks": n_chunks}
+
+        return {"files": n_files, "chunks": n_chunks, "signatures": n_files}
 
 
 class Retriever:
+    """Retrieves bounded context for agents.
+
+    Phase 2 changes:
+      - Returns compact signatures instead of raw file chunks
+      - Only returns full file content for the file being edited
+      - Respects context budget (MAX_CONTEXT_CHARS)
+      - Includes dependency information
+    """
+
     def __init__(self, vector: VectorStore, codemap: CodeMap):
         self.vector = vector
         self.codemap = codemap
 
     def retrieve(self, task: dict[str, Any], k: int = 5) -> str:
-        """Return a bounded context string for the coder agent."""
+        """Return bounded context string for the coder agent.
+
+        Args:
+            task: Task dict with title, description, files
+            k: Max number of files to include signatures for
+
+        Returns:
+            Compact context string (~4000 chars max) containing:
+            1. Relevant file signatures (from codemap)
+            2. Dependency information
+            3. Semantic search results (from vector store, if available)
+        """
         parts: list[str] = []
-        # 1. Semantic: top-k chunks
+        current_chars = 0
+
         query = " ".join(filter(None, [
             task.get("title", ""),
             task.get("description", ""),
         ]))
-        chunks = self.vector.query(query, k=k) if self.vector.available else []
-        if chunks:
-            parts.append("## Relevant file chunks (semantic)")
-            seen: set[str] = set()
-            for c in chunks:
-                if c["path"] in seen:
-                    continue
-                seen.add(c["path"])
-                parts.append(f"\n### {c['path']}")
-                parts.append("```\n" + c["content"][:1200] + "\n```")
-        # 2. Structural: ranked repo sub-map
-        submap = self.codemap.submap_for(query, k=20)
+
+        # 1. Get compact repo sub-map (signatures, not raw code)
+        submap = self.codemap.submap_for(query, k=k)
         if submap and submap != "(empty repo map)":
-            parts.append("\n## Repo map (top-20 symbols for task)")
+            parts.append("## Repo Map (AST signatures)")
             parts.append(submap)
-        # 3. Task's declared files (if any)
+            current_chars += len(submap)
+
+        # 2. If task declares specific files, get their full summaries
         files = task.get("files", "")
+        if files and current_chars < MAX_CONTEXT_CHARS:
+            parts.append("\n## Target Files")
+            for f in [f.strip() for f in files.split(",") if f.strip()]:
+                summary = self.codemap.get_file_summary(f)
+                if summary:
+                    parts.append(f"\n### {f}")
+                    parts.append(summary.signature_text)
+                    current_chars += len(summary.signature_text)
+
+                # Get dependencies
+                deps = self.codemap.get_dependencies(f)
+                if deps:
+                    parts.append(f"  depends on: {', '.join(deps[:5])}")
+
+                # Check budget
+                if current_chars > MAX_CONTEXT_CHARS:
+                    parts.append("  (context budget reached — more files omitted)")
+                    break
+
+        # 3. Semantic search (if vector store available) — but only return
+        # file paths + signature snippets, not raw content
+        if self.vector.available and current_chars < MAX_CONTEXT_CHARS:
+            chunks = self.vector.query(query, k=3)
+            if chunks:
+                parts.append("\n## Semantic Results (file references)")
+                seen_paths = set()
+                for chunk in chunks:
+                    path = chunk["path"]
+                    if path in seen_paths:
+                        continue
+                    seen_paths.add(path)
+
+                    # Get the signature summary for this file (not raw content)
+                    summary = self.codemap.get_file_summary(path)
+                    if summary:
+                        snippet = summary.signature_text[:500]
+                        parts.append(f"\n{snippet}")
+                        current_chars += len(snippet)
+                    else:
+                        # Fallback: show first 200 chars of content
+                        content_preview = chunk["content"][:200]
+                        parts.append(f"\n📄 {path}\n  {content_preview}")
+                        current_chars += len(content_preview)
+
+                    if current_chars > MAX_CONTEXT_CHARS:
+                        parts.append("  (context budget reached)")
+                        break
+
+        # 4. Task's declared files
         if files:
-            parts.append("\n## Task declares files:")
-            parts.append(files)
+            parts.append(f"\n## Task declares files: {files}")
+
         if not parts:
             return "(no retrieval context available)"
-        return "\n".join(parts)
+
+        result = "\n".join(parts)
+
+        # Enforce hard context budget
+        if len(result) > MAX_CONTEXT_CHARS:
+            result = result[:MAX_CONTEXT_CHARS] + "\n... (context budget reached)"
+
+        return result

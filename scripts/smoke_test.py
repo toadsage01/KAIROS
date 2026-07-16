@@ -157,9 +157,11 @@ print()
 
 # ----- Phase 3: verify codemap + retrieval -----
 print("STEP 5: verify codemap + retrieval")
-sym_names = {s.name for s in orch.codemap.symbols}
-print(f"  codemap has {len(orch.codemap.symbols)} symbols: {sorted(sym_names)[:10]}")
-assert len(orch.codemap.symbols) > 0, "codemap found no symbols"
+# New API: codemap.files is a dict of FileSummary objects
+file_count = len(orch.codemap.files)
+func_count = sum(len(f.functions) for f in orch.codemap.files.values())
+print(f"  codemap has {file_count} files, {func_count} function signatures")
+assert file_count > 0 or func_count > 0, "codemap found no files/functions"
 if orch.vector.available:
     stats = orch.vector.stats()
     print(f"  vector store: {stats}")
