@@ -502,9 +502,30 @@ class Orchestrator:
                 except Exception as e:  # noqa: BLE001
                     self.state.append_log(f"normalizer failed: {e}")
             
-            # Hard-cap tasks: SOTA models ignore prompt caps, so enforce here.
-            # Keep only the first N tasks (N = max_tasks_per_goal from DAG config).
-            max_tasks = getattr(self.dag, "max_tasks_per_goal", 3)
+            # Dynamic task cap: SOTA models ignore prompt caps, so enforce here.
+            # Instead of a fixed number, cap based on goal complexity:
+            #   - Goals under 30 words: max 2 tasks
+            #   - Goals under 80 words: max 4 tasks
+            #   - Goals over 80 words: max 6 tasks
+            #   - Hard ceiling: 8 tasks (prevents runaway decomposition)
+            # This adapts to different project sizes without being too restrictive.
+            goal_text = self.state.get_goal() or ""
+            # Extract just the goal text from the markdown
+            import re as _re
+            goal_match = _re.search(r"^# Goal\n\n(.+?)(?:\n|$)", goal_text, _re.DOTALL)
+            goal_clean = goal_match.group(1).strip() if goal_match else goal_text
+            goal_word_count = len(goal_clean.split())
+            
+            if goal_word_count < 30:
+                max_tasks = 2
+            elif goal_word_count < 80:
+                max_tasks = 4
+            else:
+                max_tasks = 6
+            
+            # Hard ceiling
+            max_tasks = min(max_tasks, 8)
+            
             if len(rs.tasks) > max_tasks:
                 original_count = len(rs.tasks)
                 rs.tasks = rs.tasks[:max_tasks]

@@ -25,13 +25,12 @@ the entire project — make targeted edits only.
 {% endif %}
 
 <critical_instruction>
-The current files in the worktree may be BROKEN or GARBLED (the SOTA model
-may have produced truncated/malformed output). DO NOT echo or patch the
-existing file content. Instead, REWRITE each file COMPLETELY from scratch
-based on the task requirements and reviewer feedback.
+The current files in the worktree were written by the coder. They may have
+minor defects. Your job is to fix ONLY the specific defects the reviewer
+listed — do NOT rewrite files from scratch.
 
-If a file is broken, overwrite it entirely with a correct, complete version.
-Do NOT try to "fix" broken HTML by patching — rewrite the whole file.
+If a file has a defect, use the edit_file approach: output the complete file
+with ONLY the defective parts changed. Preserve everything else exactly as-is.
 </critical_instruction>
 
 <constraints>
@@ -41,6 +40,8 @@ Do NOT try to "fix" broken HTML by patching — rewrite the whole file.
 - LESS CHANGE IS BETTER. Make the smallest possible edit that fixes each defect.
 - If a defect is unclear, skip it and fix the others. Do NOT block the entire task.
 - Do NOT use <blocked> unless ALL defects are truly impossible to fix.
+- PRESERVE all existing code that is not defective. Do not simplify, refactor, or "improve" working code.
+- If the reviewer's defect is about missing content (e.g., "file truncated"), output the COMPLETE file with the missing content added — do not rewrite from scratch, just complete what's there.
 </constraints>
 
 <output_format>
@@ -63,6 +64,10 @@ Use the CORRECT language identifier:
 Output complete, unabridged file content for every file you touch. The
 parser overwrites disk with exactly what is between the fences. Do NOT
 truncate. Do NOT use "..." or "// rest unchanged".
+
+CRITICAL: When fixing a truncated file, output the ENTIRE file from
+beginning to end — do not just output the "fix". The parser replaces
+the whole file.
 
 OPTION B — Truly blocked (ALL defects impossible):
 <blocked>

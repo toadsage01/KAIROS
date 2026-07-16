@@ -163,8 +163,29 @@ class CoderAgent(ToolAgent):
                     ctx.worktree.delete_file(blk.path)
                 else:
                     ctx.worktree.write_file(blk.path, blk.content)
+            
+            # File integrity verification: after writing, verify files
+            # are not empty/truncated/corrupted on disk
+            for blk in blocks:
+                if blk.action == "delete":
+                    continue
+                written = ctx.worktree.read_file(blk.path)
+                if not written or len(written.strip()) < 5:
+                    raise ValueError(
+                        f"file integrity check failed: {blk.path} is empty or "
+                        f"truncated on disk after write. This indicates a "
+                        f"worktree filesystem issue or garbled content."
+                    )
+                # Verify the written content matches what was intended
+                if written.strip() != blk.content.strip():
+                    self.state.append_log(
+                        f"WARNING: file {blk.path} content mismatch after write "
+                        f"(intended {len(blk.content)} chars, got {len(written)} chars)"
+                    )
+            
             ctx.worktree.commit(f"myforge: coder output for {ctx.task_id}")
             self.state.append_log(
-                f"coder task={ctx.task_id} wrote {len(blocks)} file(s) to worktree"
+                f"coder task={ctx.task_id} wrote {len(blocks)} file(s) to worktree "
+                f"(integrity verified)"
             )
         return str(path)

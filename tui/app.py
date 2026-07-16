@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from textual import work
@@ -70,6 +71,7 @@ class KairosApp(App):
         self.api = ApiClient()
         self._poll_active = False
         self._poll_count = 0
+        self._workspace_path: str | None = None
 
     def compose(self) -> ComposeResult:
         """Create the layout."""
@@ -191,13 +193,21 @@ class KairosApp(App):
             self.action_btw()
         elif cmd == "/blueprint":
             self.action_blueprint()
+        elif cmd == "/workspace" or cmd == "/ws":
+            if arg:
+                self._workspace_path = arg
+                self.notify(f"📁 Workspace set: {arg}", timeout=3)
+            else:
+                ws = self._workspace_path or "(not set — using default)"
+                self.notify(f"📁 Current workspace: {ws}", timeout=3)
         else:
             self.notify(f"Unknown command: {cmd}. Type /help for commands.", timeout=3)
 
     async def _start_run(self, goal: str) -> None:
         """Start a new run with the given goal."""
+        ws = self._workspace_path or os.getenv("MYFORGE_TARGET_REPO", "")
         self.notify(f"Starting run: {goal[:60]}...", timeout=3)
-        result = self.api.start_run(goal)
+        result = self.api.start_run(goal, workspace_path=ws if ws else None)
         if "error" in result:
             self.notify(f"❌ Failed: {result['error']}", timeout=5)
         else:

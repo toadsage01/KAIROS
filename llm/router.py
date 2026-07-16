@@ -232,12 +232,17 @@ def _validate_response(text: str, endpoint: ModelEndpoint) -> str:
     """Catch HTML/garbage responses from web bridges before they pollute state."""
     if not text or not text.strip():
         raise RuntimeError(f"empty response from {endpoint.display_name}")
-    lower = text.lower()[:500]
-    if "<html" in lower or "<!doctype" in lower:
-        raise RuntimeError(
-            f"HTML response from {endpoint.display_name} — likely Cloudflare "
-            f"block or session expiry. First 200 chars: {text[:200]!r}"
-        )
+    # Only flag as HTML/Cloudflare if there are NO code fences.
+    # If the response contains ``` fences, it's legitimate code output
+    # (e.g. ```html path=index.html containing <!DOCTYPE html>).
+    # Cloudflare blocks return raw HTML with no fences.
+    if "```" not in text:
+        lower = text.lower()[:500]
+        if "<html" in lower or "<!doctype" in lower:
+            raise RuntimeError(
+                f"HTML response from {endpoint.display_name} — likely Cloudflare "
+                f"block or session expiry. First 200 chars: {text[:200]!r}"
+            )
     if len(text) > 100_000:
         raise RuntimeError(f"oversized response from {endpoint.display_name}")
     return text
@@ -388,34 +393,62 @@ def route(agent_name: str, prompt: str,
     for i, (label, endpoint) in enumerate(chain):
         if endpoint is None:
             continue
-        try:
-            out = _call_litellm(
-                endpoint=endpoint,
-                system=system,
-                prompt=prompt,
-                temperature=cfg.temperature,
-                max_tokens=cfg.max_tokens,
-                conversation_id=conversation_id,
-                json_mode=json_mode,
-            )
-            # Response quality validation: check minimum length
-            # If the response is too short, it's likely garbled/truncated
-            # SOTA web bridges sometimes return 16-char garbage. Treat as
-            # failure and try the next fallback.
-            if len(out.strip()) < cfg.min_response_length:
-                raise RuntimeError(
-                    f"response too short ({len(out.strip())} chars, "
-                    f"min={cfg.min_response_length}) — likely truncated/garbled. "
-                    f"Output: {out[:100]!r}"
+        
+        # Auto-retry: try each endpoint up to 2 times before falling through.
+        # First attempt = normal call. If response is too short/garbled,
+        # retry once (SOTA web bridges sometimes return truncated on first try
+        # but succeed on second — page was still loading, SSE race condition, etc.)
+        for attempt in range(2):
+            try:
+                out = _call_litellm(
+                    endpoint=endpoint,
+                    system=system,
+                    prompt=prompt,
+                    temperature=cfg.temperature,
+                    max_tokens=cfg.max_tokens,
+                    conversation_id=conversation_id,
+                    json_mode=json_mode,
                 )
-            _log_success(agent_name, endpoint, is_mock=False)
-            _log_prompt_response(agent_name, endpoint, system, prompt, out)
-            return out
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            next_label = chain[i + 1][0] if i + 1 < len(chain) else None
-            _log_fallback(agent_name, endpoint, e, next_label)
-            continue
+                # Response quality validation: check minimum length
+                if len(out.strip()) < cfg.min_response_length:
+                    if attempt == 0:
+                        # First attempt failed — log and retry same endpoint
+                        from pathlib import Path
+                        import time as _t
+                        log_path = Path("logs/router.log")
+                        log_path.parent.mkdir(parents=True, exist_ok=True)
+                        with log_path.open("a", encoding="utf-8") as f:
+                            f.write(
+                                f"[{_t.strftime('%Y-%m-%dT%H:%M:%S')}] "
+                                f"agent={agent_name} model={endpoint.display_name} "
+                                f"response too short ({len(out.strip())} chars) — "
+                                f"auto-retry attempt 2\n"
+                            )
+                        import time as _sleep
+                        _sleep.sleep(2)  # brief pause before retry
+                        continue  # retry same endpoint
+                    else:
+                        # Second attempt also failed — fall through to next endpoint
+                        raise RuntimeError(
+                            f"response too short after retry ({len(out.strip())} chars, "
+                            f"min={cfg.min_response_length}) — likely truncated/garbled. "
+                            f"Output: {out[:100]!r}"
+                        )
+                
+                # Response passed validation
+                _log_success(agent_name, endpoint, is_mock=False)
+                _log_prompt_response(agent_name, endpoint, system, prompt, out)
+                return out
+                
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                if attempt == 0:
+                    # First attempt errored — retry same endpoint
+                    continue
+                # Second attempt also errored — log and try next endpoint
+                next_label = chain[i + 1][0] if i + 1 < len(chain) else None
+                _log_fallback(agent_name, endpoint, e, next_label)
+                break  # break inner loop, continue to next endpoint
 
     if cfg.allow_mock:
         _log_success(agent_name, ModelEndpoint(model="mock"), is_mock=True)
