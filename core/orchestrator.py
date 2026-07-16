@@ -458,7 +458,17 @@ class Orchestrator:
         # Thinker is special — it produces the task list, no per-task context
         if agent_name == "thinker":
             agent = _AGENT_CLASSES[agent_name](self.state, self.agents_cfg)
-            ctx = AgentContext(task_id="plan", task=None, state=self.state)
+            # /btw integration for thinker
+            btw_notes = self._read_btw_queue()
+            thinker_extra = {"btw_notes": btw_notes} if btw_notes else None
+            if btw_notes:
+                self.state.append_log(
+                    f"btw: injecting {len(btw_notes)} side note(s) into thinker"
+                )
+            ctx = AgentContext(
+                task_id="plan", task=None, state=self.state,
+                extra=thinker_extra,
+            )
             agent.run(ctx)
             # Parse plan.md into tasks
             plan_md = self.state.read_md("plan") or ""
@@ -555,10 +565,24 @@ class Orchestrator:
         if agent_cfg and hasattr(agent, "use_tools"):
             agent.use_tools = agent_cfg.use_tools
             agent.allowed_tools = agent_cfg.allowed_tools or []
+
+        # /btw integration: check for queued side questions
+        # These are notes the user typed via Ctrl+T in the TUI while
+        # the agent was running. They get injected into the next prompt.
+        btw_notes = self._read_btw_queue()
+        extra: dict[str, Any] = {}
+        if retrieval_ctx:
+            extra["retrieval"] = retrieval_ctx
+        if btw_notes:
+            extra["btw_notes"] = btw_notes
+            self.state.append_log(
+                f"btw: injecting {len(btw_notes)} side note(s) into {agent_name}"
+            )
+
         ctx = AgentContext(
             task_id=task_id, task=task, state=self.state,
             worktree=wt,
-            extra={"retrieval": retrieval_ctx} if retrieval_ctx else None,
+            extra=extra if extra else None,
             tool_registry=self.tool_registry,
             workspace_path=self.workspace_path,
             use_tools=getattr(agent, "use_tools", False),
@@ -584,3 +608,31 @@ class Orchestrator:
         if d is None:
             return RunState(status="running", current_node_id=self.dag.entry)
         return RunState.from_dict(d)
+
+    def _read_btw_queue(self) -> list[str]:
+        """Read and clear the /btw side question queue.
+
+        The TUI writes notes to state/btw_queue.json when the user
+        presses Ctrl+T. This method reads them, clears the file,
+        and returns the list of note strings.
+
+        Returns:
+            List of user notes to inject into the next agent prompt.
+        """
+        import json as _json
+        from pathlib import Path
+
+        btw_path = self.state.root / "btw_queue.json"
+        if not btw_path.exists():
+            return []
+
+        try:
+            data = _json.loads(btw_path.read_text(encoding="utf-8"))
+            if not isinstance(data, list):
+                return []
+            notes = [item.get("message", "") for item in data if item.get("message")]
+            # Clear the queue after reading
+            btw_path.write_text("[]", encoding="utf-8")
+            return notes
+        except Exception:
+            return []

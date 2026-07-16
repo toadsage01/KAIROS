@@ -112,8 +112,15 @@ class BaseAgent(ABC):
         """
         prompt = self.build_prompt(ctx)
         # Generate a conversation_id for session continuity
-        # Uses task_id + agent_name so each agent task gets a unique session
         conv_id = f"kairos-{ctx.task_id}-{self.name}"
+
+        # /btw integration: inject side notes into the prompt
+        if ctx.extra and ctx.extra.get("btw_notes"):
+            notes_text = "\n".join(
+                f"USER NOTE (mid-task): {note}" for note in ctx.extra["btw_notes"]
+            )
+            prompt += f"\n\n--- SIDE NOTES FROM USER ---\n{notes_text}\n--- END SIDE NOTES ---"
+
         out = route(
             agent_name=self.name,
             prompt=prompt,

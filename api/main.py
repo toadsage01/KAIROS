@@ -14,6 +14,7 @@ job. The orchestrator picks it up and continues.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -151,6 +152,32 @@ def job_status(job_id: str):
     return job.to_dict()
 
 
+class BTWRequest(BaseModel):
+    message: str
+
+
+@app.post("/btw")
+def btw(req: BTWRequest):
+    """Queue a /btw side note for the next agent turn.
+
+    The orchestrator reads state/btw_queue.json before each agent call
+    and injects the notes into the agent's prompt.
+    """
+    import json
+    from pathlib import Path
+    orch = _get_orch()
+    btw_path = orch.state.root / "btw_queue.json"
+    queue = []
+    if btw_path.exists():
+        try:
+            queue = json.loads(btw_path.read_text(encoding="utf-8"))
+        except Exception:
+            queue = []
+    queue.append({"message": req.message, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    btw_path.write_text(json.dumps(queue, indent=2), encoding="utf-8")
+    return {"status": "queued", "queue_length": len(queue)}
+
+
 @app.get("/jobs")
 def list_jobs(limit: int = 20):
     """List recent jobs."""
@@ -254,6 +281,61 @@ def _worker_ok() -> bool:
         return jq._worker is not None and jq._worker.is_alive()
     except Exception:
         return False
+
+
+# ---------- WebSocket for real-time streaming ----------
+@app.websocket("/ws")
+async def websocket_endpoint(websocket):
+    """WebSocket endpoint for real-time state updates.
+
+    The TUI connects to this instead of polling /state every 2 seconds.
+    Server pushes updates whenever state changes.
+
+    Message format:
+      {"type": "state", "data": {...}}
+      {"type": "log", "data": "log line"}
+      {"type": "router_log", "data": "log line"}
+    """
+    import asyncio
+    import json
+
+    await websocket.accept()
+    orch = _get_orch()
+    last_log_size = 0
+    last_router_log_size = 0
+
+    try:
+        while True:
+            # Push current state
+            snap = orch.state.snapshot()
+            rs = orch.state.read_json("tasks")
+            data = {
+                "run": rs,
+                "files": snap,
+                "current_job_id": get_job_queue().current_job_id,
+                "recent_jobs": [j.to_dict() for j in get_job_queue().list_jobs(limit=5)],
+            }
+            await websocket.send_json({"type": "state", "data": data})
+
+            # Push new log lines (only if changed)
+            log_text = snap.get("log", "")
+            if len(log_text) > last_log_size:
+                new_lines = log_text[last_log_size:]
+                await websocket.send_json({"type": "log", "data": new_lines})
+                last_log_size = len(log_text)
+
+            # Push new router log lines
+            router_log_path = Path("logs/router.log")
+            if router_log_path.exists():
+                router_text = router_log_path.read_text(encoding="utf-8")
+                if len(router_text) > last_router_log_size:
+                    new_router = router_text[last_router_log_size:]
+                    await websocket.send_json({"type": "router_log", "data": new_router})
+                    last_router_log_size = len(router_text)
+
+            await asyncio.sleep(1)  # Push every 1 second
+    except Exception:
+        pass  # Connection closed
 
 
 if __name__ == "__main__":
